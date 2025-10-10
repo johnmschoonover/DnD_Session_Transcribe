@@ -4,12 +4,12 @@ from typing import Optional
 
 @dataclass
 class ASRConfig:
-    model: str = "large-v2"          # "large-v2" | "large-v3" | "distil-large-v3"
-    device: str = "cuda"
-    compute_type: str = "float16"    # "float16" | "float32"
-    beam_size: int = 10              # 8–12 sweet spot
-    patience: float = 1.5            # 1.2–2.0 typical
-    temperature: float = 0.0
+    model: str = "large-v3"         # "large-v2" | "large-v3" | "distil-large-v3"
+    device: str = "cuda"            # "cuda" | "cpu" | "mps"
+    compute_type: str = "float16"   # "float16" | "float32"
+    beam_size: int = 10             # 8–12 sweet spot
+    patience: float = 1.5           # 1.2–2.0 typical
+    temperature: float = 0.0        # 0.0–1.0
     use_vad: bool = True
 
     # VAD params (use build_vad_params in helpers)
