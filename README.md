@@ -24,6 +24,18 @@ pip install .
 
 This pulls in the dependencies declared in the project metadata so the CLI can run without additional manual steps.
 
+> **GPU wheels:** If you instead install from `requirements.txt`, note that the project pins CUDA-enabled builds of
+> `torch`, `torchaudio`, and `torchvision` (`*+cu121`). Those wheels live on the PyTorch extra index, so standard pip
+> will need a finder override:
+>
+> ```bash
+> pip install -r requirements.txt \
+>   -f https://download.pytorch.org/whl/cu121
+> ```
+>
+> Without the `-f`/`--extra-index-url` hint, pip reports “No matching distribution found” because the CUDA wheels are
+> not published to the default PyPI index.
+
 ### External Requirements
 - **FFmpeg** – Required for audio decoding, clipping, and vocal extraction helpers. Ensure `ffmpeg` is available on your `PATH` (e.g., via `apt`, `brew`, or manual downloads).
 - **UVR5 CLI (optional)** – Needed when invoking `--vocal-extract mdx_kim2` to isolate vocals before transcription. Install the Ultimate Vocal Remover v5 command-line tools and verify they are discoverable from the shell running the script.
