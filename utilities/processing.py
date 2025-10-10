@@ -1,8 +1,12 @@
 import torch
 import whisperx
+import logging
 from typing import List, Tuple
 
 from constants import ScrubConfig
+
+
+logger = logging.getLogger(__name__)
 
 
 def make_diarization_pipeline(token: str, device: str | torch.device):
@@ -21,11 +25,13 @@ def make_diarization_pipeline(token: str, device: str | torch.device):
     # Try module path first (most reliable across versions)
     try:
         from whisperx.diarize import DiarizationPipeline as _DP
+        logger.debug("Using whisperx.diarize.DiarizationPipeline")
         return _DP(use_auth_token=token, device=dev_obj)
     except Exception as e1:
         # Fall back to top-level attribute (older builds)
         try:
             _DP = getattr(whisperx, "DiarizationPipeline")
+            logger.debug("Falling back to whisperx.DiarizationPipeline")
             return _DP(use_auth_token=token, device=dev_obj)
         except Exception as e2:
             raise RuntimeError(
@@ -73,7 +79,9 @@ def find_hard_spans(segments: List[dict], dur: float, logprob_thr: float, cr_thr
         if cr is not None and cr > cr_thr:      bad = True
         if ns is not None and ns > nospeech_thr:bad = True
         if bad: marks.append((float(s["start"]), float(s["end"])))
-    if not marks: return []
+    if not marks:
+        logger.debug("No hard spans found")
+        return []
     marks.sort()
     merged = []
     cs, ce = marks[0]
@@ -85,6 +93,7 @@ def find_hard_spans(segments: List[dict], dur: float, logprob_thr: float, cr_thr
     for s,e in merged:
         s = max(0.0, s - pad); e = min(dur, e + pad)
         if e - s >= 0.2: out.append((s,e))
+    logger.debug("Identified %d hard span(s)", len(out))
     return out
 
 
@@ -115,5 +124,5 @@ def clamp_to_duration(segments: List[dict], dur: float) -> List[dict]:
         nen = max(nst + 1e-3, min(en,  dur - eps))
         if abs(nst - st) > 1e-3 or abs(nen - en) > 1e-3: adjusted += 1
         fixed.append({**s, "start": nst, "end": nen})
-    print(f"[align-prepare] kept={len(fixed)} adjusted={adjusted} dropped={dropped} (dur={dur:.2f}s)")
+    logger.info("[align-prepare] kept=%d adjusted=%d dropped=%d (dur=%.2fs)", len(fixed), adjusted, dropped, dur)
     return fixed

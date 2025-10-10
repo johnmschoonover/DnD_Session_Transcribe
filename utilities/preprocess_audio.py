@@ -1,8 +1,13 @@
 import tempfile
 import shlex
 import pathlib
+import logging
 
 from .ffmpeg import ffmpeg
+
+
+logger = logging.getLogger(__name__)
+
 
 def preprocess_audio(src_audio: str, mode: str) -> str:
     """Return a path to the audio that should be fed to ASR/diarization."""
@@ -17,6 +22,7 @@ def preprocess_audio(src_audio: str, mode: str) -> str:
             f'-ac 1 -ar 16000 -sample_fmt s16 {shlex.quote(out)}'
         )
         ffmpeg(cmd)
+        logger.debug("Bandpass preprocessed audio written to %s", out)
         return out
     if mode == "mdx_kim2":
         # Requires UVR5 CLI in PATH; fallback: bandpass if fail
@@ -29,9 +35,10 @@ def preprocess_audio(src_audio: str, mode: str) -> str:
             ffmpeg(cmd)  # reuse ffmpeg runner for simplicity
             # choose vocals stem
             for cand in pathlib.Path(stem_dir).glob("**/*Vocals*.wav"):
+                logger.debug("UVR mdx_kim2 output selected: %s", cand)
                 return str(cand)
             raise RuntimeError("UVR output missing vocals stem.")
         except Exception as e:
-            print(f"[preproc] UVR mdx_kim2 failed: {e} → falling back to bandpass")
+            logger.warning("[preproc] UVR mdx_kim2 failed: %s → falling back to bandpass", e)
             return preprocess_audio(src_audio, "bandpass")
     return src_audio

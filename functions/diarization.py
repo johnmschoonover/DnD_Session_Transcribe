@@ -1,5 +1,6 @@
 import pandas as pd
 import json
+import logging
 
 from constants import DiarizationConfig
 from helpers import atomic_json
@@ -8,6 +9,9 @@ from utilities import make_diarization_pipeline
 from constants import WritingConfig as WR
 
 import os, pathlib
+
+
+logger = logging.getLogger(__name__)
 
 def normalize_diarization_to_df(d, audio_dur: float, speaker_prefix: str) -> pd.DataFrame:
     try:
@@ -44,10 +48,12 @@ def run_diarization(audio_path: str, device: str, cfg: DiarizationConfig,
 
     dia_df_json = f"{out_base}_diarization_df.json"
     if resume and os.path.exists(dia_df_json):
-        print("[diarize] resume: using cached diarization df")
+        logger.info("[diarize] resume: using cached diarization df")
+        logger.debug("Loading diarization DataFrame from %s", dia_df_json)
         return pd.DataFrame(json.load(open(dia_df_json, "r", encoding="utf-8")))
 
     pipe = make_diarization_pipeline(token=token, device=device)
+    logger.debug("Constructed diarization pipeline with token=%s device=%s", bool(token), device)
 
     # Loosen tiny splits if the pipeline exposes parameters
     try:
@@ -66,20 +72,23 @@ def run_diarization(audio_path: str, device: str, cfg: DiarizationConfig,
             overrides["clustering"]["max_speakers_per_frame"] = cfg.max_speakers_per_frame
         if overrides:
             pipe.pipeline = pipe.pipeline.instantiate(overrides)
+            logger.debug("Applied diarization parameter overrides: %s", overrides)
     except Exception:
         pass
 
     spk = cfg.num_speakers
     try:
+        logger.debug("Running diarization on %s with num_speakers=%s", audio_path, spk)
         ann = pipe(audio_path, num_speakers=spk)
         df = normalize_diarization_to_df(ann, audio_dur, WR.speaker_tag_prefix)
         if df.empty and cfg.allow_range_fallback and spk and spk > 1:
-            print(f"[diarize] 0 regions at {spk}; retry {spk-1}–{spk+1}…")
+            logger.warning("[diarize] 0 regions at %s; retry %s–%s…", spk, max(1, spk-1), spk+1)
             ann = pipe(audio_path, min_speakers=max(1, spk-1), max_speakers=spk+1)
             df = normalize_diarization_to_df(ann, audio_dur, WR.speaker_tag_prefix)
     except Exception as e:
         raise SystemExit(f"[diarize] failed: {e}")
 
     atomic_json(dia_df_json, df.to_dict(orient="records"))
-    print(f"[diarize-prepare] rows={len(df)}")
+    logger.debug("Wrote diarization DataFrame to %s", dia_df_json)
+    logger.info("[diarize-prepare] rows=%d", len(df))
     return df

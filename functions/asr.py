@@ -1,6 +1,7 @@
 import pathlib
 import json
 import os, sys
+import logging
 
 from typing import List, Optional
 from faster_whisper import WhisperModel
@@ -13,13 +14,17 @@ from tqdm.auto import tqdm
 PROGRESS_STREAM = sys.stdout
 IS_TTY = PROGRESS_STREAM.isatty()
 
+
+logger = logging.getLogger(__name__)
+
 def run_asr(audio_path: str, out_base: pathlib.Path,
             asr_cfg: ASRConfig, hotwords: Optional[str], init_prompt: Optional[str],
             resume: bool, total_sec: float) -> List[dict]:
 
     raw_json = f"{out_base}_fw_segments_raw.json"
     if resume and os.path.exists(raw_json):
-        print("[ASR] resume: using cached raw segments")
+        logger.info("[ASR] resume: using cached raw segments")
+        logger.debug("Loading segments from %s", raw_json)
         return json.load(open(raw_json, "r", encoding="utf-8"))["segments"]
 
     vad_params = build_vad_params(
@@ -27,13 +32,21 @@ def run_asr(audio_path: str, out_base: pathlib.Path,
         asr_cfg.vad_speech_pad_ms, asr_cfg.vad_max_speech_s
     )
 
-    print(f"[ASR] model={asr_cfg.model} device={asr_cfg.device} compute={asr_cfg.compute_type} "
-          f"beam={asr_cfg.beam_size} patience={asr_cfg.patience} vad={asr_cfg.use_vad}")
+    logger.info(
+        "[ASR] model=%s device=%s compute=%s beam=%s patience=%s vad=%s",
+        asr_cfg.model,
+        asr_cfg.device,
+        asr_cfg.compute_type,
+        asr_cfg.beam_size,
+        asr_cfg.patience,
+        asr_cfg.use_vad,
+    )
+    logger.debug("VAD parameters: %s", vad_params)
 
     try:
         fw = WhisperModel(asr_cfg.model, device=asr_cfg.device, compute_type=asr_cfg.compute_type)
     except Exception as e:
-        print(f"[ASR] init failed on {asr_cfg.compute_type}: {e} → retry float32")
+        logger.warning("[ASR] init failed on %s: %s → retry float32", asr_cfg.compute_type, e)
         fw = WhisperModel(asr_cfg.model, device=asr_cfg.device, compute_type="float32")
 
     # Stream decode
@@ -85,4 +98,6 @@ def run_asr(audio_path: str, out_base: pathlib.Path,
 
     p_cnt.close(); p_time.close()
     atomic_json(raw_json, {"segments": segments})
+    logger.debug("Wrote raw segments to %s", raw_json)
+    logger.info("[ASR] produced %d segments", len(segments))
     return segments
