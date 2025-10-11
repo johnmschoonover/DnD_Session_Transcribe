@@ -172,3 +172,121 @@ def test_sample_clip_diarization_uses_two_speakers(monkeypatch, tmp_path):
     with diarization_json.open("r", encoding="utf-8") as fh:
         saved_df = pd.DataFrame(json.load(fh))
     pdt.assert_frame_equal(saved_df[df.columns], df)
+
+
+def test_run_diarization_returns_single_row_when_num_speakers_leq_one(tmp_path):
+    audio_dur = 0.5
+    expected_end = max(1e-3, audio_dur - 1e-3)
+    cfg = DiarizationConfig(num_speakers=1)
+
+    out_base = tmp_path / "single"
+    df = run_diarization(
+        audio_path=str(tmp_path / "unused.wav"),
+        device="cpu",
+        cfg=cfg,
+        token="",
+        audio_dur=audio_dur,
+        out_base=out_base,
+        resume=False,
+    )
+
+    expected = pd.DataFrame(
+        [
+            {
+                "start": 0.0,
+                "end": expected_end,
+                "speaker": "PLAYER00",
+            }
+        ]
+    )
+    pdt.assert_frame_equal(df.reset_index(drop=True), expected)
+
+    diarization_json = Path(f"{out_base}_diarization_df.json")
+    assert diarization_json.exists()
+    with diarization_json.open("r", encoding="utf-8") as fh:
+        saved = pd.DataFrame(json.load(fh))
+    pdt.assert_frame_equal(saved[df.columns], df)
+
+
+def test_run_diarization_uses_range_fallback_when_first_call_empty(monkeypatch, tmp_path):
+    repo_root = Path(__file__).resolve().parents[2]
+    audio_path = repo_root / "sample_audio" / "test.wav"
+
+    class _RecordingFallbackPipeline:
+        def __init__(self) -> None:
+            self.pipeline = _DummyInnerPipeline()
+            self.calls: list[dict[str, object]] = []
+
+        def __call__(
+            self,
+            path: str,
+            *,
+            num_speakers: int | None = None,
+            min_speakers: int | None = None,
+            max_speakers: int | None = None,
+        ):
+            call = {
+                "audio_path": Path(path),
+                "num_speakers": num_speakers,
+                "min_speakers": min_speakers,
+                "max_speakers": max_speakers,
+            }
+            self.calls.append(call)
+            if min_speakers is None and max_speakers is None:
+                return []
+            return [
+                {"start": 0.0, "end": 1.0, "label": "SPEAKER_01"},
+                {"start": 1.0, "end": 2.0, "label": "SPEAKER_02"},
+            ]
+
+    dummy_pipeline = _RecordingFallbackPipeline()
+
+    def _fake_make_diarization_pipeline(token: str, device: str):
+        assert device == "cpu"
+        return dummy_pipeline
+
+    monkeypatch.setattr(
+        "dnd_session_transcribe.features.diarization.make_diarization_pipeline",
+        _fake_make_diarization_pipeline,
+    )
+
+    cfg = DiarizationConfig(num_speakers=3, allow_range_fallback=True)
+    out_base = tmp_path / "fallback"
+    df = run_diarization(
+        str(audio_path),
+        device="cpu",
+        cfg=cfg,
+        token="",
+        audio_dur=3.0,
+        out_base=out_base,
+        resume=False,
+    )
+
+    assert dummy_pipeline.calls == [
+        {
+            "audio_path": audio_path,
+            "num_speakers": 3,
+            "min_speakers": None,
+            "max_speakers": None,
+        },
+        {
+            "audio_path": audio_path,
+            "num_speakers": None,
+            "min_speakers": 2,
+            "max_speakers": 4,
+        },
+    ]
+
+    expected = pd.DataFrame(
+        [
+            {"start": 0.0, "end": 1.0, "speaker": "PLAYER_01"},
+            {"start": 1.0, "end": 2.0, "speaker": "PLAYER_02"},
+        ]
+    )
+    pdt.assert_frame_equal(df.reset_index(drop=True), expected)
+
+    diarization_json = Path(f"{out_base}_diarization_df.json")
+    assert diarization_json.exists()
+    with diarization_json.open("r", encoding="utf-8") as fh:
+        saved = pd.DataFrame(json.load(fh))
+    pdt.assert_frame_equal(saved[df.columns], df)
