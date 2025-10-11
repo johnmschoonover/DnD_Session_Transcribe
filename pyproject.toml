@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dnd-session-transcribe"
+version = "0.1.0"
+description = "Transcribe Dungeons & Dragons sessions with WhisperX and helpful utilities."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+  { name = "DnD Session Transcribe Maintainers" }
+]
+dependencies = [
+  "faster-whisper",
+  "whisperx",
+  "torch",
+  "pandas",
+  "soundfile",
+  "tqdm"
+]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent"
+]
+keywords = ["transcription", "dnd", "whisper", "whisperx"]
+
+[project.urls]
+Homepage = "https://github.com/dnd-session-transcribe/dnd-session-transcribe"
+Documentation = "https://github.com/dnd-session-transcribe/dnd-session-transcribe"
+
+[project.scripts]
+dnd-transcribe = "run_whisperx:main"
+
+[project.optional-dependencies]
+uvr5 = ["uvr5"]
+
+[tool.setuptools]
+py-modules = ["run_whisperx"]
+
+[tool.setuptools.packages.find]
+include = ["*"]
