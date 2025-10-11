@@ -1,7 +1,11 @@
 import pathlib
 import os
 import json
+import logging
 from helpers import atomic_json
+
+
+logger = logging.getLogger(__name__)
 
 def write_srt_vtt_txt_json(final: dict, base: pathlib.Path):
     def fmt_ts(t: float, vtt: bool=False) -> str:
@@ -20,6 +24,7 @@ def write_srt_vtt_txt_json(final: dict, base: pathlib.Path):
             txt = (seg.get("text") or "").strip()
             label = f"[{sp}] " if sp else ""
             f.write(f"{i}\n{fmt_ts(st)} --> {fmt_ts(en)}\n{label}{txt}\n\n")
+    logger.debug("Wrote SRT to %s", srt_path)
 
     # VTT
     vtt_path = f"{base}.vtt"
@@ -31,6 +36,7 @@ def write_srt_vtt_txt_json(final: dict, base: pathlib.Path):
             txt = (seg.get("text") or "").strip()
             label = f"[{sp}] " if sp else ""
             f.write(f"{fmt_ts(st, vtt=True)} --> {fmt_ts(en, vtt=True)}\n{label}{txt}\n\n")
+    logger.debug("Wrote VTT to %s", vtt_path)
 
     # TXT
     txt_path = f"{base}.txt"
@@ -39,10 +45,12 @@ def write_srt_vtt_txt_json(final: dict, base: pathlib.Path):
             sp = seg.get("speaker", "")
             txt = (seg.get("text") or "").strip()
             f.write(f"[{sp}] {txt}\n" if sp else txt + "\n")
+    logger.debug("Wrote TXT to %s", txt_path)
 
     # JSON (full)
     json_path = f"{base}.json"
     atomic_json(json_path, final)
+    logger.debug("Wrote JSON to %s", json_path)
 
     sizes = {
         "srt": os.path.getsize(srt_path),
@@ -50,4 +58,10 @@ def write_srt_vtt_txt_json(final: dict, base: pathlib.Path):
         "txt": os.path.getsize(txt_path),
         "json": os.path.getsize(json_path),
     }
-    print(f"[write] sizes → srt:{sizes['srt']:,} vtt:{sizes['vtt']:,} txt:{sizes['txt']:,} json:{sizes['json']:,} bytes")
+    logger.info(
+        "[write] sizes → srt:%s vtt:%s txt:%s json:%s bytes",
+        f"{sizes['srt']:,}",
+        f"{sizes['vtt']:,}",
+        f"{sizes['txt']:,}",
+        f"{sizes['json']:,}",
+    )
