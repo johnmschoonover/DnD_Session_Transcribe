@@ -63,6 +63,19 @@ Commonly used options (consult `dnd-transcribe --help` for the full list):
 - `--hotwords-file`, `--initial-prompt-file`, `--spelling-map` – Provide customization files for ASR biasing and post-processing.
 - `--asr-model`, `--asr-device`, `--asr-compute-type` – Override the Faster-Whisper model id, device, or compute precision.
 - `--precise-model`, `--precise-device`, `--precise-compute-type` – Tune the optional precise rerun pass when GPU resources differ from the defaults.
+- `--preview-start`, `--preview-duration`, `--preview-output` – Render a standalone WAV snippet for preview playback and run the full transcription stack on that excerpt. The start time accepts seconds or `MM:SS`/`HH:MM:SS` values, the duration defaults to 10s, and the snippet is always copied into the preview output directory (auto-named `preview_<prefix>N` unless you supply `--outdir`). A custom `--preview-output` path receives a duplicate copy in addition to the managed folder.
+
+### Rendering preview snippets
+
+Supply any of the preview flags to export a temporary snippet that GUI integrations or manual spot-checks can play back. The command continues on to produce transcript artifacts (`.srt`, `.vtt`, `.txt`, `.json`) for just that excerpt once the preview WAV is written:
+
+```bash
+dnd-transcribe sample_audio/test.wav \
+  --preview-start 1:23 --preview-duration 5 \
+  --preview-output /tmp/test_preview.wav
+```
+
+The CLI reports every preview copy it writes (managed output directory plus any custom path) and the actual length of the rendered snippet when it completes. Preview runs keep their artifacts—snippet audio and transcripts—inside the `preview_` output directory so the association is unambiguous.
 
 ### CPU-friendly overrides
 
@@ -75,7 +88,7 @@ dnd-transcribe sample_audio/test.wav \
 
 When enabling `--precise-rerun` on CPU, pair it with `--precise-model tiny --precise-device cpu --precise-compute-type float32` to avoid CUDA requirements.
 
-The script automatically chooses an output directory (`textN` alongside the audio) unless `--outdir` is supplied.
+The script automatically chooses an output directory (`textN` alongside the audio) unless `--outdir` is supplied. Preview runs instead create `preview_textN` next to the source audio (or `preview_<custom>` if you provide `--outdir`).
 
 ## Outputs
 Each run writes artifacts prefixed by the audio stem inside the resolved output directory:
