@@ -9,6 +9,8 @@ __all__ = [
     "copy_to_ram_if_requested",
     "ffmpeg",
     "ffmpeg_cut",
+    "PreviewSnippet",
+    "render_preview",
     "ensure_hf_token",
     "preprocess_audio",
     "read_duration_seconds",
@@ -21,6 +23,14 @@ _ATTR_TO_MODULE = {
     ),
     "ffmpeg": ("dnd_session_transcribe.adapters.ffmpeg", "ffmpeg"),
     "ffmpeg_cut": ("dnd_session_transcribe.adapters.ffmpeg", "ffmpeg_cut"),
+    "PreviewSnippet": (
+        "dnd_session_transcribe.adapters.preview",
+        "PreviewSnippet",
+    ),
+    "render_preview": (
+        "dnd_session_transcribe.adapters.preview",
+        "render_preview",
+    ),
     "ensure_hf_token": (
         "dnd_session_transcribe.adapters.huggingface",
         "ensure_hf_token",
