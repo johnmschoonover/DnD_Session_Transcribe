@@ -11,14 +11,27 @@ from ..util.helpers import atomic_json
 from ..util.processing import make_diarization_pipeline
 
 
+def _is_pyannote_annotation(candidate: object) -> bool:
+    """Return ``True`` when *candidate* behaves like ``pyannote.core.Annotation``.
+
+    Importing :mod:`pyannote.core` at runtime triggers Matplotlib deprecation
+    warnings due to legacy colormap helpers.  To avoid pulling the module when
+    it is not otherwise needed we rely on duck-typing instead of ``isinstance``.
+    The check intentionally sticks to stable ``Annotation`` APIs: ``itertracks``
+    is the method exercised by :func:`normalize_diarization_to_df` and a plain
+    callable attribute is sufficient for our purposes.
+    """
+
+    return hasattr(candidate, "itertracks") and callable(candidate.itertracks)
+
+
 logger = logging.getLogger(__name__)
 
 def normalize_diarization_to_df(d, audio_dur: float, speaker_prefix: str) -> pd.DataFrame:
     try:
-        from pyannote.core import Annotation
-        if isinstance(d, Annotation):
+        if _is_pyannote_annotation(d):
             rows = []
-            for seg, _, lab in d.itertracks(yield_label=True):
+            for seg, _, lab in d.itertracks(yield_label=True):  # type: ignore[call-arg]
                 rows.append({"start": float(seg.start), "end": float(seg.end), "speaker": str(lab)})
             df = pd.DataFrame(rows)
         else:

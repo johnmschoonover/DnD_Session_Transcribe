@@ -7,7 +7,10 @@ import wave
 import pandas as pd
 from pandas import testing as pdt
 
-from dnd_session_transcribe.features.diarization import run_diarization
+from dnd_session_transcribe.features.diarization import (
+    normalize_diarization_to_df,
+    run_diarization,
+)
 from dnd_session_transcribe.util.config import DiarizationConfig
 
 
@@ -70,6 +73,42 @@ class _DummyDiarizationPipeline:
 def _load_audio_duration(audio_path: Path) -> float:
     with wave.open(str(audio_path), "rb") as wav:
         return wav.getnframes() / float(wav.getframerate())
+
+
+class _SegmentStub:
+    def __init__(self, start: float, end: float) -> None:
+        self.start = start
+        self.end = end
+
+
+class _AnnotationLike:
+    def __init__(self, rows: list[tuple[float, float, str]]) -> None:
+        self._rows = rows
+        self.calls = 0
+
+    def itertracks(self, *, yield_label: bool = False):
+        self.calls += 1
+        assert yield_label, "normalize_diarization_to_df should request labels"
+        for start, end, label in self._rows:
+            yield _SegmentStub(start, end), None, label
+
+
+def test_normalize_diarization_handles_annotation_like_object():
+    ann = _AnnotationLike([
+        (0.0, 1.0, "SPEAKER_00"),
+        (1.0, 2.5, "SPEAKER_01"),
+    ])
+
+    df = normalize_diarization_to_df(ann, audio_dur=5.0, speaker_prefix="PLAYER")
+
+    assert ann.calls == 1
+    expected = pd.DataFrame(
+        [
+            {"start": 0.0, "end": 1.0, "speaker": "PLAYER_00"},
+            {"start": 1.0, "end": 2.5, "speaker": "PLAYER_01"},
+        ]
+    )
+    pdt.assert_frame_equal(df.reset_index(drop=True), expected)
 
 
 def test_sample_clip_diarization_uses_two_speakers(monkeypatch, tmp_path):
