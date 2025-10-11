@@ -1,11 +1,6 @@
-import sys
-from pathlib import Path
-
 import pytest
 
-sys.path.append(str(Path(__file__).resolve().parents[2]))
-
-from helpers.vad import build_vad_params
+from dnd_session_transcribe.util.helpers import build_vad_params
 
 
 def test_build_vad_params_casts_required_values_to_ints():

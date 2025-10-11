@@ -13,33 +13,28 @@ PROGRESS_STREAM = sys.stdout
 IS_TTY = PROGRESS_STREAM.isatty()
 
 # --- configs ---
-from constants import (
+from .util.config import (
     ASRConfig, DiarizationConfig, LoggingConfig, PreciseRerunConfig,
     PreprocessConfig, ProfilesConfig, ScrubConfig, WritingConfig
 )
 
 # --- helpers (data helpers) ---
-from helpers import (
+from .util.helpers import (
     load_hotwords, load_initial_prompt,
     load_spelling_map, apply_spelling_rules, atomic_json
 )
 
 # --- utilities (infra helpers) ---
-from utilities import (
-    ensure_hf_token,
-    next_outdir_for,
-    copy_to_ram_if_requested,
-    preprocess_audio,
-    read_duration_seconds,
-    write_srt_vtt_txt_json,
-    scrub_segments,
-    find_hard_spans,
-    splice_segments,
-    clamp_to_duration
-)
+from .adapters.copy_to_ram import copy_to_ram_if_requested
+from .adapters.huggingface import ensure_hf_token
+from .adapters.preprocess_audio import preprocess_audio
+from .adapters.read_duration_seconds import read_duration_seconds
+from .util.next_outdir import next_outdir_for
+from .util.processing import clamp_to_duration, find_hard_spans, scrub_segments, splice_segments
+from .util.write_files import write_srt_vtt_txt_json
 
 # --- functions (core steps) ---
-from functions import (
+from .features import (
     run_asr,
     rerun_precise_on_spans,
     run_alignment,

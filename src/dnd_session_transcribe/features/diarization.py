@@ -1,14 +1,14 @@
-import pandas as pd
 import json
 import logging
+import os
+import pathlib
 
-from constants import DiarizationConfig
-from helpers import atomic_json
-from utilities import make_diarization_pipeline
+import pandas as pd
 
-from constants import WritingConfig as WR
-
-import os, pathlib
+from ..util.config import DiarizationConfig
+from ..util.config import WritingConfig as WR
+from ..util.helpers import atomic_json
+from ..util.processing import make_diarization_pipeline
 
 
 logger = logging.getLogger(__name__)

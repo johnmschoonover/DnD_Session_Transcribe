@@ -6,8 +6,8 @@ import logging
 from typing import List, Optional
 from faster_whisper import WhisperModel
 
-from constants import ASRConfig
-from helpers import build_vad_params, atomic_json
+from ..util.config import ASRConfig
+from ..util.helpers import build_vad_params, atomic_json
 
 # --- progress bars ---
 from tqdm.auto import tqdm

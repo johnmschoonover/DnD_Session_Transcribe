@@ -5,7 +5,7 @@ import whisperx
 
 from typing import List
 
-from helpers import atomic_json
+from ..util.helpers import atomic_json
 
 
 logger = logging.getLogger(__name__)

@@ -1,13 +1,9 @@
-from pathlib import Path
-import sys
-
-ROOT = Path(__file__).resolve().parents[2]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
-
-from helpers.hotwords import load_hotwords
-from helpers.initial_prompt import load_initial_prompt
-from helpers.spelling_map import apply_spelling_rules, load_spelling_map
+from dnd_session_transcribe.util.helpers import (
+    apply_spelling_rules,
+    load_hotwords,
+    load_initial_prompt,
+    load_spelling_map,
+)
 
 
 def test_load_hotwords_normalization(tmp_path):
