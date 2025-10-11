@@ -310,7 +310,7 @@ def test_parse_time_spec_formats(cli_module):
         cli_module.parse_time_spec(-1)
 
 
-def test_main_renders_preview_and_exits(cli_module, monkeypatch, tmp_path):
+def test_main_renders_preview_and_transcribes_snippet(cli_module, monkeypatch, tmp_path):
     audio = tmp_path / "input.wav"
     audio.write_bytes(b"RIFF")
 
@@ -363,13 +363,42 @@ def test_main_renders_preview_and_exits(cli_module, monkeypatch, tmp_path):
 
     monkeypatch.setattr(cli_module.shutil, "copyfile", fake_copy)
 
-    def fail_if_called(*_, **__):  # pragma: no cover - guard
-        raise AssertionError("pipeline should not run when preview requested")
+    monkeypatch.setattr(cli_module, "copy_to_ram_if_requested", lambda path, use_ram: path)
+    monkeypatch.setattr(cli_module, "preprocess_audio", lambda audio_path, mode: audio_path)
+    monkeypatch.setattr(cli_module, "load_hotwords", lambda *_: None)
+    monkeypatch.setattr(cli_module, "load_initial_prompt", lambda *_: None)
+    monkeypatch.setattr(cli_module, "load_spelling_map", lambda *_: None)
+    monkeypatch.setattr(cli_module, "read_duration_seconds", lambda *_: 3.75)
+    monkeypatch.setattr(cli_module, "scrub_segments", lambda segs, cfg: segs)
+    monkeypatch.setattr(cli_module, "atomic_json", lambda *_, **__: None)
 
-    monkeypatch.setattr(cli_module, "run_asr", fail_if_called)
+    run_asr_calls: list[str] = []
+
+    def fake_run_asr(audio_path, *_, **__):
+        run_asr_calls.append(audio_path)
+        return [{"start": 0.0, "end": 3.0, "text": "hello"}]
+
+    monkeypatch.setattr(cli_module, "run_asr", fake_run_asr)
+    monkeypatch.setattr(cli_module, "find_hard_spans", lambda *_, **__: [])
+    monkeypatch.setattr(cli_module, "clamp_to_duration", lambda segs, _: segs)
+    monkeypatch.setattr(cli_module, "run_alignment", lambda *_, **__: [{"text": "aligned"}])
+    monkeypatch.setattr(cli_module, "ensure_hf_token", lambda: "token")
+    monkeypatch.setattr(cli_module, "run_diarization", lambda *_, **__: pd.DataFrame([{"start": 0, "end": 3, "speaker": "S0"}]))
+    final_outputs: list[tuple[list[dict], Path]] = []
+
+    def fake_write(final, base):
+        final_outputs.append((final, Path(base)))
+
+    monkeypatch.setattr(cli_module, "write_srt_vtt_txt_json", fake_write)
+
+    outdir = tmp_path / "preview-out"
+    monkeypatch.setattr(cli_module, "next_outdir_for", lambda audio_path, prefix: outdir)
 
     cli_module.main()
 
     assert preview_calls == [(audio, pytest.approx(1.5), pytest.approx(4.0))]
     assert output_path.exists()
     assert copy_calls == [(str(snippet_path), str(output_path))]
+    assert run_asr_calls == [str(output_path)]
+    assert final_outputs
+    assert final_outputs[0][1].name == output_path.stem

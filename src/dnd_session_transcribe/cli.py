@@ -172,6 +172,8 @@ def main():
     if not audio.exists():
         raise SystemExit(f"Audio not found: {audio}")
 
+    original_audio = audio
+
     preview_requested = (
         args.preview_start is not None
         or args.preview_duration is not None
@@ -205,7 +207,10 @@ def main():
                 snippet.duration,
             )
 
-        return
+        audio = output_path
+        logger.info(
+            "Continuing with transcription for preview snippet from %s", original_audio
+        )
 
     # CLI → config overrides
     if args.vocal_extract is not None:

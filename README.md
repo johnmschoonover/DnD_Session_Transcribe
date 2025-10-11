@@ -63,11 +63,11 @@ Commonly used options (consult `dnd-transcribe --help` for the full list):
 - `--hotwords-file`, `--initial-prompt-file`, `--spelling-map` – Provide customization files for ASR biasing and post-processing.
 - `--asr-model`, `--asr-device`, `--asr-compute-type` – Override the Faster-Whisper model id, device, or compute precision.
 - `--precise-model`, `--precise-device`, `--precise-compute-type` – Tune the optional precise rerun pass when GPU resources differ from the defaults.
-- `--preview-start`, `--preview-duration`, `--preview-output` – Render a standalone WAV snippet for preview playback without running the full pipeline. The start time accepts seconds or `MM:SS`/`HH:MM:SS` values, the duration defaults to 10s, and the output path defaults to `<audio_stem>_preview.wav` alongside the source file.
+- `--preview-start`, `--preview-duration`, `--preview-output` – Render a standalone WAV snippet for preview playback and run the full transcription stack on that excerpt. The start time accepts seconds or `MM:SS`/`HH:MM:SS` values, the duration defaults to 10s, and the output path defaults to `<audio_stem>_preview.wav` alongside the source file.
 
 ### Rendering preview snippets
 
-Supply any of the preview flags to export a temporary snippet that GUI integrations or manual spot-checks can play back. The command exits after producing the WAV file:
+Supply any of the preview flags to export a temporary snippet that GUI integrations or manual spot-checks can play back. The command continues on to produce transcript artifacts (`.srt`, `.vtt`, `.txt`, `.json`) for just that excerpt once the preview WAV is written:
 
 ```bash
 dnd-transcribe sample_audio/test.wav \
