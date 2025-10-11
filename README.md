@@ -5,7 +5,7 @@ This repository wraps an end-to-end speech transcription workflow optimized for 
 
 ### Pipeline Summary
 `dnd-transcribe` wires together the following stages:
-1. **Optional preprocessing** – Copies audio into RAM for faster IO (`--ram`) and can run vocal extraction (`--vocal-extract` with `off`, `bandpass`, or `mdx_kim2`).
+1. **Optional preprocessing** – Copies audio into RAM for faster IO (`--ram`) and can run vocal extraction (`--vocal-extract` with `off` or `bandpass`).
 2. **Faster-Whisper ASR** – Generates initial segments, optionally primed with hotwords, an initial prompt, and post-run spelling correction maps.
 3. **Optional precise re-run** – Reruns difficult spans with more exact ASR settings when `--precise-rerun` is enabled.
 4. **WhisperX alignment** – Refines word-level timestamps for the recognized text.
@@ -38,7 +38,7 @@ This pulls in the dependencies declared in the project metadata so the CLI can r
 
 ### External Requirements
 - **FFmpeg** – Required for audio decoding, clipping, and vocal extraction helpers. Ensure `ffmpeg` is available on your `PATH` (e.g., via `apt`, `brew`, or manual downloads).
-- **UVR5 CLI (optional)** – Needed when invoking `--vocal-extract mdx_kim2` to isolate vocals before transcription. Install the Ultimate Vocal Remover v5 command-line tools and verify they are discoverable from the shell running the script.
+- **Bandpass filtering** – A lightweight high/low-pass filter that boosts dialog intelligibility without external dependencies.
 
 ## Environment Variables
 - `HUGGINGFACE_TOKEN` – A mandatory token with access to the pyannote diarization models. The pipeline calls `utilities.ensure_hf_token()` before diarization and aborts if the variable is not set. Export the token in your shell or configure it via your environment manager so the diarization stage can authenticate against Hugging Face.
@@ -57,7 +57,7 @@ dnd-transcribe /path/to/audio.wav
 Commonly used options (consult `dnd-transcribe --help` for the full list):
 - `--ram` – Copy the input audio to `/dev/shm` (tmpfs) for faster processing on systems with ample memory.
 - `--precise-rerun` – Enable the high-accuracy ASR pass over spans flagged as difficult after the first transcription.
-- `--vocal-extract {off,bandpass,mdx_kim2}` – Override the preprocessing strategy, including optional UVR5 separation via `mdx_kim2`.
+- `--vocal-extract {off,bandpass}` – Override the preprocessing strategy. `bandpass` applies a 50–7800 Hz filter with loudness normalization.
 - `--num-speakers` – Override the diarization speaker count when the automatic estimate needs correction.
 - `--resume` – Reuse cached JSON checkpoints to avoid recomputing completed stages.
 - `--hotwords-file`, `--initial-prompt-file`, `--spelling-map` – Provide customization files for ASR biasing and post-processing.
@@ -89,6 +89,6 @@ Intermediate JSON checkpoints (e.g., `*_fw_segments_scrubbed.json`) are also sav
 ## Troubleshooting
 - **Missing Hugging Face access** – If the script stops with `[HF] Missing HUGGINGFACE_TOKEN`, generate or renew a token on Hugging Face, grant it access to the pyannote models, and export it before retrying.
 - **Diarization failures** – Poor audio quality or aggressive preprocessing can yield empty diarization tracks. Try disabling vocal extraction, supplying `--num-speakers`, or verifying the token has pyannote access.
-- **UVR5 extraction errors** – Confirm the UVR5 CLI is installed and callable when using `--vocal-extract mdx_kim2`; fall back to `bandpass` or `off` otherwise.
+- **Preprocessing errors** – Fall back to `--vocal-extract off` if bandpass filtering fails unexpectedly.
 
 With the prerequisites satisfied, a single CLI invocation handles the entire transcription-to-diarization pipeline end-to-end.

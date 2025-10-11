@@ -34,9 +34,6 @@ Documentation = "https://github.com/dnd-session-transcribe/dnd-session-transcrib
 [project.scripts]
 dnd-transcribe = "dnd_session_transcribe.cli:main"
 
-[project.optional-dependencies]
-uvr5 = ["uvr5"]
-
 [tool.setuptools]
 package-dir = {"" = "src"}
 

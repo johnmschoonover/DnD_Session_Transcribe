@@ -14,6 +14,12 @@ def preprocess_audio(src_audio: str, mode: str) -> str:
     if mode == "off":
         return src_audio
     out = tempfile.NamedTemporaryFile(suffix=".wav", delete=False).name
+    if mode == "mdx_kim2":
+        logger.warning(
+            "[preproc] mdx_kim2 mode has been removed; defaulting to bandpass filtering."
+        )
+        mode = "bandpass"
+
     if mode == "bandpass":
         # 50–7800 Hz band + loudnorm; mono 16k; s16
         cmd = (
@@ -24,21 +30,6 @@ def preprocess_audio(src_audio: str, mode: str) -> str:
         ffmpeg(cmd)
         logger.debug("Bandpass preprocessed audio written to %s", out)
         return out
-    if mode == "mdx_kim2":
-        # Requires UVR5 CLI in PATH; fallback: bandpass if fail
-        try:
-            stem_dir = tempfile.mkdtemp(prefix="uvr_")
-            cmd = (
-                f'uvr5 -i {shlex.quote(src_audio)} -o {shlex.quote(stem_dir)} '
-                f'--model mdx_kim2 --format wav --sr 16000 --mono'
-            )
-            ffmpeg(cmd)  # reuse ffmpeg runner for simplicity
-            # choose vocals stem
-            for cand in pathlib.Path(stem_dir).glob("**/*Vocals*.wav"):
-                logger.debug("UVR mdx_kim2 output selected: %s", cand)
-                return str(cand)
-            raise RuntimeError("UVR output missing vocals stem.")
-        except Exception as e:
-            logger.warning("[preproc] UVR mdx_kim2 failed: %s → falling back to bandpass", e)
-            return preprocess_audio(src_audio, "bandpass")
+    if mode not in {"off"}:
+        logger.warning("[preproc] Unknown preprocess mode '%s'; returning original audio", mode)
     return src_audio
