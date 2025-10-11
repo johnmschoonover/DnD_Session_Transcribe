@@ -1,4 +1,6 @@
 import importlib
+from importlib.machinery import ModuleSpec
+from contextlib import contextmanager
 from pathlib import Path
 import sys
 import types
@@ -11,15 +13,30 @@ import pytest
 @pytest.fixture
 def cli_module(monkeypatch):
     fake_whisperx = types.SimpleNamespace(assign_word_speakers=lambda dia, aligned: [])
-    fake_torch = types.SimpleNamespace(
-        backends=types.SimpleNamespace(
-            cuda=types.SimpleNamespace(matmul=types.SimpleNamespace(allow_tf32=False)),
-            cudnn=types.SimpleNamespace(allow_tf32=False),
-        )
+    fake_faster_whisper = types.ModuleType("faster_whisper")
+
+    class _DummyModel:
+        def __init__(self, *_, **__):
+            pass
+
+        def transcribe(self, *_args, **_kwargs):
+            return iter(()), types.SimpleNamespace()
+
+    fake_faster_whisper.WhisperModel = _DummyModel
+    fake_faster_whisper.__loader__ = object()
+    fake_faster_whisper.__spec__ = ModuleSpec("faster_whisper", loader=fake_faster_whisper.__loader__)
+    fake_torch = types.ModuleType("torch")
+    fake_torch.backends = types.SimpleNamespace(
+        cuda=types.SimpleNamespace(matmul=types.SimpleNamespace(allow_tf32=False)),
+        cudnn=types.SimpleNamespace(allow_tf32=False),
     )
+    fake_torch.device = types.SimpleNamespace
+    fake_torch.__loader__ = object()
+    fake_torch.__spec__ = ModuleSpec("torch", loader=fake_torch.__loader__)
 
     monkeypatch.setitem(sys.modules, "whisperx", fake_whisperx)
     monkeypatch.setitem(sys.modules, "torch", fake_torch)
+    monkeypatch.setitem(sys.modules, "faster_whisper", fake_faster_whisper)
 
     module = importlib.import_module("dnd_session_transcribe.cli")
     return importlib.reload(module)
@@ -48,6 +65,9 @@ def test_parse_args_round_trip(cli_module, monkeypatch):
     assert args.resume is True
     assert args.num_speakers == 2
     assert args.vocal_extract == "bandpass"
+    assert args.preview_start is None
+    assert args.preview_duration is None
+    assert args.preview_output is None
 
 
 def test_main_exits_when_audio_missing(cli_module, monkeypatch, tmp_path):
@@ -70,6 +90,9 @@ def test_main_exits_when_audio_missing(cli_module, monkeypatch, tmp_path):
         precise_compute_type=None,
         vocal_extract=None,
         log_level="INFO",
+        preview_start=None,
+        preview_duration=None,
+        preview_output=None,
     )
 
     monkeypatch.setattr(cli_module, "parse_args", lambda: args)
@@ -109,6 +132,9 @@ def test_main_runs_pipeline_with_overrides(cli_module, monkeypatch, tmp_path):
         precise_compute_type="float32",
         vocal_extract="bandpass",
         log_level="DEBUG",
+        preview_start=None,
+        preview_duration=None,
+        preview_output=None,
     )
 
     monkeypatch.setattr(cli_module, "parse_args", lambda: args)
@@ -270,3 +296,80 @@ def test_main_runs_pipeline_with_overrides(cli_module, monkeypatch, tmp_path):
     final_call = written.pop()
     assert final_call[0] == ["final"]
     assert Path(final_call[1]).name == "input"
+
+
+def test_parse_time_spec_formats(cli_module):
+    assert cli_module.parse_time_spec("1:30") == pytest.approx(90.0)
+    assert cli_module.parse_time_spec("01:02:03") == pytest.approx(3723.0)
+    assert cli_module.parse_time_spec(5) == pytest.approx(5.0)
+
+    with pytest.raises(ValueError):
+        cli_module.parse_time_spec("nonsense")
+
+    with pytest.raises(ValueError):
+        cli_module.parse_time_spec(-1)
+
+
+def test_main_renders_preview_and_exits(cli_module, monkeypatch, tmp_path):
+    audio = tmp_path / "input.wav"
+    audio.write_bytes(b"RIFF")
+
+    snippet_path = tmp_path / "snippet.wav"
+    snippet_path.write_bytes(b"RIFFdata")
+
+    output_path = tmp_path / "out" / "custom_preview.wav"
+
+    args = types.SimpleNamespace(
+        audio=str(audio),
+        outdir=None,
+        ram=False,
+        resume=False,
+        num_speakers=None,
+        hotwords_file=None,
+        initial_prompt_file=None,
+        spelling_map=None,
+        precise_rerun=False,
+        asr_model=None,
+        asr_device=None,
+        asr_compute_type=None,
+        precise_model=None,
+        precise_device=None,
+        precise_compute_type=None,
+        vocal_extract=None,
+        log_level="INFO",
+        preview_start="0:01.5",
+        preview_duration="4",
+        preview_output=str(output_path),
+    )
+
+    monkeypatch.setattr(cli_module, "parse_args", lambda: args)
+
+    preview_calls: list[tuple[Path, float, float]] = []
+
+    @contextmanager
+    def fake_render_preview(audio_path, *, start, duration, hook=None):
+        preview_calls.append((audio_path, start, duration))
+        yield types.SimpleNamespace(path=snippet_path, duration=3.75)
+
+    monkeypatch.setattr(cli_module, "render_preview", fake_render_preview)
+
+    copy_calls: list[tuple[str, str]] = []
+
+    def fake_copy(src, dst):
+        copy_calls.append((str(src), str(dst)))
+        dst_path = Path(dst)
+        dst_path.parent.mkdir(parents=True, exist_ok=True)
+        dst_path.write_bytes(Path(src).read_bytes())
+
+    monkeypatch.setattr(cli_module.shutil, "copyfile", fake_copy)
+
+    def fail_if_called(*_, **__):  # pragma: no cover - guard
+        raise AssertionError("pipeline should not run when preview requested")
+
+    monkeypatch.setattr(cli_module, "run_asr", fail_if_called)
+
+    cli_module.main()
+
+    assert preview_calls == [(audio, pytest.approx(1.5), pytest.approx(4.0))]
+    assert output_path.exists()
+    assert copy_calls == [(str(snippet_path), str(output_path))]

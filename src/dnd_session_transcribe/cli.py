@@ -28,6 +28,7 @@ from .util.helpers import (
 from .adapters.copy_to_ram import copy_to_ram_if_requested
 from .adapters.huggingface import ensure_hf_token
 from .adapters.preprocess_audio import preprocess_audio
+from .adapters.preview import render_preview
 from .adapters.read_duration_seconds import read_duration_seconds
 from .util.next_outdir import next_outdir_for
 from .util.processing import clamp_to_duration, find_hard_spans, scrub_segments, splice_segments
@@ -48,6 +49,7 @@ import torch
 
 # ========================= CLI =========================
 import argparse
+import shutil
 
 
 logger = logging.getLogger(__name__)
@@ -62,6 +64,36 @@ LOG_LEVELS = {
     "INFO": logging.INFO,
     "DEBUG": logging.DEBUG,
 }
+
+
+def parse_time_spec(value: str | float | int) -> float:
+    """Parse a flexible time specification into seconds."""
+
+    if isinstance(value, (int, float)):
+        seconds = float(value)
+    else:
+        text = str(value).strip()
+        try:
+            seconds = float(text)
+        except ValueError as exc:
+            parts = text.split(":")
+            if len(parts) not in (2, 3):
+                raise ValueError(f"Invalid time specification: {value!r}") from exc
+
+            try:
+                seconds = float(parts[-1])
+                minutes = int(parts[-2])
+                hours = int(parts[-3]) if len(parts) == 3 else 0
+            except ValueError as inner_exc:
+                raise ValueError(f"Invalid time specification: {value!r}") from inner_exc
+
+            seconds += minutes * 60
+            seconds += hours * 3600
+
+    if seconds < 0:
+        raise ValueError("Time specification must be non-negative")
+
+    return seconds
 
 
 def parse_args():
@@ -96,6 +128,21 @@ def parse_args():
         default=LOG.level,
         help="Logging verbosity (default: %(default)s)",
     )
+    ap.add_argument(
+        "--preview-start",
+        default=None,
+        help="Start time for preview rendering (seconds or MM:SS / HH:MM:SS)",
+    )
+    ap.add_argument(
+        "--preview-duration",
+        default=None,
+        help="Duration for preview rendering in seconds (default: 10s)",
+    )
+    ap.add_argument(
+        "--preview-output",
+        default=None,
+        help="Optional path for the rendered preview WAV (default: alongside audio)",
+    )
     return ap.parse_args()
 
 
@@ -120,6 +167,46 @@ def main():
     )
     logger.debug("Logging initialized at %s", args.log_level)
 
+    audio = pathlib.Path(args.audio).resolve()
+    logger.debug("Resolved audio path: %s", audio)
+    if not audio.exists():
+        raise SystemExit(f"Audio not found: {audio}")
+
+    preview_requested = (
+        args.preview_start is not None
+        or args.preview_duration is not None
+        or args.preview_output is not None
+    )
+
+    # Preview rendering short-circuit
+    if preview_requested:
+        start_sec = parse_time_spec(args.preview_start) if args.preview_start is not None else 0.0
+        duration_sec = (
+            parse_time_spec(args.preview_duration)
+            if args.preview_duration is not None
+            else 10.0
+        )
+        output_path = (
+            pathlib.Path(args.preview_output).expanduser().resolve()
+            if args.preview_output is not None
+            else audio.with_name(f"{audio.stem}_preview.wav")
+        )
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        logger.info(
+            "Rendering preview from %.2fs for %.2fs → %s", start_sec, duration_sec, output_path
+        )
+
+        with render_preview(audio, start=start_sec, duration=duration_sec) as snippet:
+            shutil.copyfile(snippet.path, output_path)
+            logger.info(
+                "Preview snippet ready: %s (%.2fs)",
+                output_path,
+                snippet.duration,
+            )
+
+        return
+
     # CLI → config overrides
     if args.vocal_extract is not None:
         PRE.vocal_extract = args.vocal_extract
@@ -143,11 +230,6 @@ def main():
         PREC.device = args.precise_device
     if args.precise_compute_type:
         PREC.compute_type = args.precise_compute_type
-
-    audio = pathlib.Path(args.audio).resolve()
-    logger.debug("Resolved audio path: %s", audio)
-    if not audio.exists():
-        raise SystemExit(f"Audio not found: {audio}")
 
     # outdir (auto textN if not provided)
     outdir = pathlib.Path(args.outdir).resolve() if args.outdir else next_outdir_for(str(audio), WR.out_prefix)
