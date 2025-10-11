@@ -1,10 +1,10 @@
 # DnD Session Transcribe
 
 ## Project Overview
-This repository wraps an end-to-end speech transcription workflow optimized for tabletop roleplaying game sessions and similarly long recordings. The main entry point, [`run_whisperx.py`](run_whisperx.py), orchestrates preprocessing, automatic speech recognition (ASR), alignment, and diarization into a single command so you can go from raw audio to timecoded, speaker-attributed transcripts with minimal manual effort.
+This repository wraps an end-to-end speech transcription workflow optimized for tabletop roleplaying game sessions and similarly long recordings. The installable CLI entry point, `dnd-transcribe`, orchestrates preprocessing, automatic speech recognition (ASR), alignment, and diarization into a single command so you can go from raw audio to timecoded, speaker-attributed transcripts with minimal manual effort.
 
 ### Pipeline Summary
-`run_whisperx.py` wires together the following stages:
+`dnd-transcribe` wires together the following stages:
 1. **Optional preprocessing** – Copies audio into RAM for faster IO (`--ram`) and can run vocal extraction (`--vocal-extract` with `off`, `bandpass`, or `mdx_kim2`).
 2. **Faster-Whisper ASR** – Generates initial segments, optionally primed with hotwords, an initial prompt, and post-run spelling correction maps.
 3. **Optional precise re-run** – Reruns difficult spans with more exact ASR settings when `--precise-rerun` is enabled.
@@ -51,16 +51,29 @@ export HUGGINGFACE_TOKEN=hf_your_token_here
 Run the end-to-end pipeline by pointing to an audio file:
 
 ```bash
-python run_whisperx.py /path/to/audio.wav
+dnd-transcribe /path/to/audio.wav
 ```
 
-Commonly used options (consult `python run_whisperx.py --help` for the full list):
+Commonly used options (consult `dnd-transcribe --help` for the full list):
 - `--ram` – Copy the input audio to `/dev/shm` (tmpfs) for faster processing on systems with ample memory.
 - `--precise-rerun` – Enable the high-accuracy ASR pass over spans flagged as difficult after the first transcription.
 - `--vocal-extract {off,bandpass,mdx_kim2}` – Override the preprocessing strategy, including optional UVR5 separation via `mdx_kim2`.
 - `--num-speakers` – Override the diarization speaker count when the automatic estimate needs correction.
 - `--resume` – Reuse cached JSON checkpoints to avoid recomputing completed stages.
 - `--hotwords-file`, `--initial-prompt-file`, `--spelling-map` – Provide customization files for ASR biasing and post-processing.
+- `--asr-model`, `--asr-device`, `--asr-compute-type` – Override the Faster-Whisper model id, device, or compute precision.
+- `--precise-model`, `--precise-device`, `--precise-compute-type` – Tune the optional precise rerun pass when GPU resources differ from the defaults.
+
+### CPU-friendly overrides
+
+The default configuration targets GPU-equipped systems (`large-v3`, `cuda`, `float16`). On CPU-only hosts, select a lighter model and precision explicitly:
+
+```bash
+dnd-transcribe sample_audio/test.wav \
+  --asr-model tiny --asr-device cpu --asr-compute-type int8_float32
+```
+
+When enabling `--precise-rerun` on CPU, pair it with `--precise-model tiny --precise-device cpu --precise-compute-type float32` to avoid CUDA requirements.
 
 The script automatically chooses an output directory (`textN` alongside the audio) unless `--outdir` is supplied.
 

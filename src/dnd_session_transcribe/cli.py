@@ -77,6 +77,17 @@ def parse_args():
     ap.add_argument("--initial-prompt-file", default=None, help="Short context prompt for first window")
     ap.add_argument("--spelling-map", default=None, help="CSV wrong,right for post-correction")
     ap.add_argument("--precise-rerun", action="store_true", help="Re-ASR hard spans with ultra-precise settings")
+    ap.add_argument("--asr-model", default=None, help="Override Faster-Whisper model id (e.g., tiny, turbo, large-v3)")
+    ap.add_argument("--asr-device", choices=["cuda", "cpu", "mps"], default=None,
+                    help="Select device for Faster-Whisper (default: config)")
+    ap.add_argument("--asr-compute-type", default=None,
+                    help="Override compute type (float16, float32, int8_float32, etc.)")
+    ap.add_argument("--precise-model", default=None,
+                    help="Override precise rerun model when --precise-rerun is used")
+    ap.add_argument("--precise-device", choices=["cuda", "cpu", "mps"], default=None,
+                    help="Select device for the precise rerun (default: config)")
+    ap.add_argument("--precise-compute-type", default=None,
+                    help="Override compute type for the precise rerun")
     ap.add_argument("--vocal-extract", choices=["off", "bandpass", "mdx_kim2"], default=None,
                     help="Override preprocessing (off/bandpass/mdx_kim2)")
     ap.add_argument(
@@ -116,10 +127,22 @@ def main():
         ASR.hotwords_file = args.hotwords_file
     if args.initial_prompt_file:
         ASR.initial_prompt_file = args.initial_prompt_file
+    if args.asr_model:
+        ASR.model = args.asr_model
+    if args.asr_device:
+        ASR.device = args.asr_device
+    if args.asr_compute_type:
+        ASR.compute_type = args.asr_compute_type
     if args.num_speakers:
         DIA.num_speakers = args.num_speakers
     if args.precise_rerun:
         PREC.enabled = True
+    if args.precise_model:
+        PREC.model = args.precise_model
+    if args.precise_device:
+        PREC.device = args.precise_device
+    if args.precise_compute_type:
+        PREC.compute_type = args.precise_compute_type
 
     audio = pathlib.Path(args.audio).resolve()
     logger.debug("Resolved audio path: %s", audio)
@@ -186,7 +209,7 @@ def main():
             )
             repl = rerun_precise_on_spans(
                 VOCAL_AUDIO, spans, "en", PREC.model, PREC.compute_type,
-                PREC.beam_size, PREC.patience, PREC.window_max_s
+                PREC.device, PREC.beam_size, PREC.patience, PREC.window_max_s
             )
             fw_segments = splice_segments(fw_segments, repl)
             fw_segments = scrub_segments(fw_segments, SCR)

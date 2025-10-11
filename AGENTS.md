@@ -6,6 +6,7 @@ Welcome! The project was recently restructured into an installable package. Plea
 - Install the project in editable mode during development: `pip install -e .[uvr5]` (add `--extra-index-url` if you need CUDA wheels).
 - The CLI entry point is `dnd-transcribe`, exposed via `src/dnd_session_transcribe/cli.py`. Use this command (not `python run_whisperx.py`) for smoke tests, e.g. `dnd-transcribe --help`.
 - Modules should import configuration by going through `dnd_session_transcribe.util.config`; avoid assuming the working directory.
+- Runtime defaults favor GPU-heavy Faster-Whisper settings (`large-v3` / `cuda` / `float16`). When you need CPU-friendly runs, document and wire CLI overrides (e.g., `--asr-model tiny --asr-device cpu --asr-compute-type int8_float32`) instead of mutating the config defaults.
 
 ## Code Organization
 - `src/dnd_session_transcribe/cli.py` keeps argument parsing and the high-level pipeline wiring. Push heavy logic into feature modules.
