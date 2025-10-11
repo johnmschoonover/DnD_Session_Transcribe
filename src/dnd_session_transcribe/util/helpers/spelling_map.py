@@ -21,6 +21,12 @@ def load_spelling_map(path: str | None) -> List[Tuple[str, str]]:
 def apply_spelling_rules(text: str, rules: List[Tuple[str, str]]) -> str:
     """Apply case-insensitive whole-word replacements to text."""
     out = text
-    for w, r in rules:
-        out = re.sub(rf"\b{re.escape(w)}\b", r, out, flags=re.IGNORECASE)
+    for wrong, replacement in rules:
+        pattern = rf"\b{re.escape(wrong)}\b"
+        out = re.sub(
+            pattern,
+            lambda match, repl=replacement: repl,
+            out,
+            flags=re.IGNORECASE,
+        )
     return out
