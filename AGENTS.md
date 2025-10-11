@@ -1,42 +1,41 @@
-# DnD Session Transcribe – Agent Guidelines
+# DnD Session Transcribe – Agent Guidelines (2024 refresh)
 
-Welcome to the project! This repository wires together preprocessing, Faster-Whisper ASR, WhisperX alignment, and pyannote diarization to build polished transcripts for long-form tabletop sessions. Follow the conventions below whenever you touch code under this repo.
+Welcome! The project was recently restructured into an installable package. Please read the notes below before changing code in this repository.
+
+## Installation & CLI
+- Install the project in editable mode during development: `pip install -e .[uvr5]` (add `--extra-index-url` if you need CUDA wheels).
+- The CLI entry point is `dnd-transcribe`, exposed via `src/dnd_session_transcribe/cli.py`. Use this command (not `python run_whisperx.py`) for smoke tests, e.g. `dnd-transcribe --help`.
+- Modules should import configuration by going through `dnd_session_transcribe.util.config`; avoid assuming the working directory.
 
 ## Code Organization
-- **Entry point:** `run_whisperx.py` contains the CLI and orchestrates the pipeline. Keep it focused on wiring and lightweight flow-control; push non-trivial logic into the `functions/`, `helpers/`, or `utilities/` packages.
-- **Core stages:**
-  - `functions/` – heavy operations (ASR, alignment, diarization, precise reruns).
-  - `utilities/` – infrastructure helpers (I/O, Hugging Face token checks, preprocessing, output writers).
-  - `helpers/` – lightweight data helpers (VAD parameters, hotwords, initial prompts, spelling maps, atomic JSON writes).
-  - `constants/` – dataclass-style configuration defaults.
-- **Tests:** Live under `tests/` mirroring the helper or utility they target. Add/update tests alongside any behavioral change.
+- `src/dnd_session_transcribe/cli.py` keeps argument parsing and the high-level pipeline wiring. Push heavy logic into feature modules.
+- `features/` contains the core stages: `asr.py`, `alignment.py`, `diarization.py`, and `precise_rerun.py`.
+- `adapters/` holds integration glue for external libraries (WhisperX, pyannote, UVR). Keep external API calls isolated here.
+- `util/` provides shared helpers: configuration defaults (`util/config`), path helpers (`next_outdir.py`), preprocessing (`processing.py`), and writers (`write_files.py`).
+- Tests live under `tests/` mirroring the util/helper they cover. Add tests alongside any behavior change.
 
 ## Coding Standards
-- Target Python **3.10+**. Use `pathlib.Path` for filesystem work and keep type hints up-to-date.
-- Import grouping mirrors the existing modules: stdlib → third-party → local packages, with section comments when helpful.
-- Use module-level `logger = logging.getLogger(__name__)` and structured logging (no bare `print`). Prefer informative messages with prefixes (`[ASR]`, `[DIA]`, etc.) that match existing style.
-- When writing files, prefer the dedicated helpers (`utilities.write_srt_vtt_txt_json`, `helpers.atomic_json`, etc.) rather than ad-hoc `open()` calls. This keeps writes atomic and consistent.
-- Honor the existing progress bar approach via `tqdm.auto` and `PROGRESS_STREAM`. If you add new progress reporting, match the configuration already in `run_whisperx.py` or `functions/asr.py`.
-- Fail fast with explicit exceptions or `SystemExit` for user-facing CLI issues; avoid silent fall-throughs.
-- Keep CLI surfaces self-documenting: update `parse_args()` help text and README snippets if flags change.
-- Stick to f-strings for formatting and avoid try/except guards around imports. Import late only for truly heavy dependencies (see `run_whisperx.py`).
+- Target Python 3.10+. Prefer `pathlib.Path` and keep type hints accurate.
+- Import grouping: stdlib → third-party → local. No try/except around imports.
+- Use module-level `logger = logging.getLogger(__name__)` and structured log messages with feature prefixes (e.g., `[ASR]`, `[ALIGN]`).
+- When writing outputs, favor helpers in `util.write_files` or `util.helpers.atomic_json` for atomic I/O.
+- CLI help text in `cli.py` must stay in sync with README examples.
 
-## Adding Dependencies
-- Declare runtime dependencies in `pyproject.toml`. If CUDA-specific wheels are required, mirror the guidance already present in `requirements*.txt`.
-- If a helper only needs a dependency optionally (e.g., UVR), gate the import locally and document the requirement in docstrings/README.
+## Dependencies
+- Runtime dependencies belong in `pyproject.toml`; optional ones in the relevant extras (`[project.optional-dependencies]`).
+- If you gate optional imports (e.g., UVR), document the requirement in the module docstring and README.
 
 ## Testing & Verification
-- Run unit tests with `pytest`. Use targeted invocations when working on a subset, e.g. `pytest tests/helpers/test_hotwords.py`.
-- For CLI-affecting changes, smoke-test `python run_whisperx.py --help` to confirm argument wiring and default text remain sane.
-- If you modify long-running stages (ASR/diarization), ensure they can still be resumed (`--resume`) by exercising the relevant JSON checkpoints.
+- Run unit tests with `pytest`. Use targeted paths for quicker feedback (e.g., `pytest tests/util/test_processing.py`).
+- For CLI-affecting changes, run `dnd-transcribe --help` to ensure arguments and defaults are correct.
+- If you change long-running stages, ensure resume/checkpointing via JSON artifacts still works.
 
-## Documentation Expectations
-- Update `README.md` when user-facing workflow or options change.
-- Keep docstrings succinct but descriptive, especially for new helpers/utilities consumed by multiple modules.
-- Mention environment prerequisites (FFmpeg, Hugging Face tokens, UVR) if you make them more/less strict.
+## Documentation
+- Update `README.md` when user workflows or CLI flags change.
+- Maintain docstrings for shared helpers and adapters, especially where external APIs are invoked.
 
-## Pull Request Tips
-- Describe pipeline impacts clearly: note effects on latency, accuracy, and file outputs.
-- Reference relevant tests in the PR body and include reproduction steps for manual flows when applicable.
+## Pull Requests
+- Summarize pipeline impacts (latency, accuracy, outputs) in the PR body.
+- Reference relevant tests and include reproduction steps for manual flows when applicable.
 
-Adhering to these guidelines keeps the transcription pipeline predictable and approachable for future contributors. Thanks! 
+Thanks for keeping the transcription pipeline polished!
