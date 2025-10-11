@@ -6,6 +6,7 @@ import wave
 
 import pandas as pd
 from pandas import testing as pdt
+import pytest
 
 from dnd_session_transcribe.features.diarization import (
     normalize_diarization_to_df,
@@ -111,6 +112,16 @@ def test_normalize_diarization_handles_annotation_like_object():
     pdt.assert_frame_equal(df.reset_index(drop=True), expected)
 
 
+def test_normalize_diarization_handles_errors():
+    class _BrokenAnnotation:
+        def itertracks(self, *, yield_label: bool = False):
+            raise RuntimeError("boom")
+
+    df = normalize_diarization_to_df(_BrokenAnnotation(), audio_dur=2.0, speaker_prefix="NPC")
+
+    assert df.empty
+
+
 def test_sample_clip_diarization_uses_two_speakers(monkeypatch, tmp_path):
     repo_root = Path(__file__).resolve().parents[2]
     audio_path = repo_root / "sample_audio" / "test.wav"
@@ -172,3 +183,100 @@ def test_sample_clip_diarization_uses_two_speakers(monkeypatch, tmp_path):
     with diarization_json.open("r", encoding="utf-8") as fh:
         saved_df = pd.DataFrame(json.load(fh))
     pdt.assert_frame_equal(saved_df[df.columns], df)
+
+
+def test_run_diarization_resume_uses_cached_file(monkeypatch, tmp_path):
+    out_base = tmp_path / "cached"
+    cached = [
+        {"start": 0.0, "end": 1.0, "speaker": "PLAYER_00"},
+        {"start": 1.0, "end": 2.0, "speaker": "PLAYER_01"},
+    ]
+    (tmp_path / "cached_diarization_df.json").write_text(json.dumps(cached), encoding="utf-8")
+
+    def fail(*args, **kwargs):
+        raise AssertionError("resume should bypass pipeline construction")
+
+    monkeypatch.setattr(
+        "dnd_session_transcribe.features.diarization.make_diarization_pipeline",
+        fail,
+    )
+
+    df = run_diarization(
+        audio_path="clip.wav",
+        device="cpu",
+        cfg=DiarizationConfig(num_speakers=2),
+        token="",
+        audio_dur=3.0,
+        out_base=out_base,
+        resume=True,
+    )
+
+    expected = pd.DataFrame(cached)
+    pdt.assert_frame_equal(df[expected.columns], expected)
+
+
+def test_run_diarization_single_speaker_covers_duration(tmp_path):
+    out_base = tmp_path / "solo"
+
+    df = run_diarization(
+        audio_path="clip.wav",
+        device="cpu",
+        cfg=DiarizationConfig(num_speakers=1),
+        token="",
+        audio_dur=4.0,
+        out_base=out_base,
+        resume=False,
+    )
+
+    assert len(df) == 1
+    row = df.iloc[0]
+    assert row["start"] == 0.0
+    assert row["end"] == pytest.approx(3.999)
+    assert row["speaker"] == "PLAYER00"
+
+
+def test_run_diarization_range_fallback_when_empty(monkeypatch, tmp_path):
+    class _FallbackPipeline:
+        def __init__(self):
+            self.pipeline = _DummyInnerPipeline()
+            self.calls: list[dict[str, object]] = []
+
+        def __call__(self, audio_path, num_speakers=None, min_speakers=None, max_speakers=None):
+            call = {
+                "num_speakers": num_speakers,
+                "min_speakers": min_speakers,
+                "max_speakers": max_speakers,
+            }
+            self.calls.append(call)
+            if min_speakers is not None or max_speakers is not None:
+                return [
+                    {"start": 0.0, "end": 1.0, "label": "SPEAKER_02"},
+                    {"start": 1.0, "end": 2.0, "label": "SPEAKER_03"},
+                ]
+            return []
+
+    dummy = _FallbackPipeline()
+
+    monkeypatch.setattr(
+        "dnd_session_transcribe.features.diarization.make_diarization_pipeline",
+        lambda token, device: dummy,
+    )
+
+    cfg = DiarizationConfig(num_speakers=3, allow_range_fallback=True)
+
+    df = run_diarization(
+        audio_path="clip.wav",
+        device="cpu",
+        cfg=cfg,
+        token="token",
+        audio_dur=2.5,
+        out_base=tmp_path / "range",
+        resume=False,
+    )
+
+    assert dummy.calls == [
+        {"num_speakers": 3, "min_speakers": None, "max_speakers": None},
+        {"num_speakers": None, "min_speakers": 2, "max_speakers": 4},
+    ]
+    assert not df.empty
+    assert set(df["speaker"]) == {"PLAYER_02", "PLAYER_03"}

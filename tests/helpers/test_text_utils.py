@@ -78,3 +78,9 @@ def test_apply_spelling_rules_allows_literal_backslashes():
     updated = apply_spelling_rules(text, rules)
 
     assert updated == r"Maintain DC\\5 on the Area\\Effect zone."
+
+
+def test_load_spelling_map_handles_missing(tmp_path):
+    assert load_spelling_map(None) == []
+    missing = tmp_path / "missing.csv"
+    assert load_spelling_map(str(missing)) == []
