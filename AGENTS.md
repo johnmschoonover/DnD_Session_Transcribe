@@ -28,7 +28,7 @@ Welcome! The project was recently restructured into an installable package. Plea
 - If you gate optional imports (e.g., UVR), document the requirement in the module docstring and README.
 
 ## Testing & Verification
-- Run unit tests with `pytest`. Use targeted paths for quicker feedback (e.g., `pytest tests/util/test_processing.py`).
+- Always run `pytest` before committing or submitting a change. Use targeted paths for quicker feedback (e.g., `pytest tests/util/test_processing.py`).
 - For CLI-affecting changes, run `dnd-transcribe --help` to ensure arguments and defaults are correct.
 - If you change long-running stages, ensure resume/checkpointing via JSON artifacts still works.
 - ffmpeg will need to be installed via apt.
