@@ -180,34 +180,56 @@ def main():
         or args.preview_output is not None
     )
 
+    outdir: pathlib.Path | None = None
+
     # Preview rendering short-circuit
     if preview_requested:
+        if args.outdir:
+            requested_outdir = pathlib.Path(args.outdir).expanduser().resolve()
+            if requested_outdir.name.startswith("preview_"):
+                outdir = requested_outdir
+            else:
+                outdir = requested_outdir.parent / f"preview_{requested_outdir.name}"
+        else:
+            outdir = next_outdir_for(str(original_audio), f"preview_{WR.out_prefix}")
+
+        outdir.mkdir(parents=True, exist_ok=True)
+
         start_sec = parse_time_spec(args.preview_start) if args.preview_start is not None else 0.0
         duration_sec = (
             parse_time_spec(args.preview_duration)
             if args.preview_duration is not None
             else 10.0
         )
-        output_path = (
-            pathlib.Path(args.preview_output).expanduser().resolve()
-            if args.preview_output is not None
-            else audio.with_name(f"{audio.stem}_preview.wav")
-        )
-        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        preview_primary = outdir / f"{original_audio.stem}_preview.wav"
+        destinations: list[pathlib.Path] = []
+
+        if args.preview_output is not None:
+            user_path = pathlib.Path(args.preview_output).expanduser().resolve()
+            user_path.parent.mkdir(parents=True, exist_ok=True)
+            destinations.append(user_path)
+
+        destinations.append(preview_primary)
 
         logger.info(
-            "Rendering preview from %.2fs for %.2fs → %s", start_sec, duration_sec, output_path
+            "Rendering preview from %.2fs for %.2fs", start_sec, duration_sec
         )
 
         with render_preview(audio, start=start_sec, duration=duration_sec) as snippet:
-            shutil.copyfile(snippet.path, output_path)
-            logger.info(
-                "Preview snippet ready: %s (%.2fs)",
-                output_path,
-                snippet.duration,
-            )
+            seen: set[pathlib.Path] = set()
+            for dest in destinations:
+                if dest in seen:
+                    continue
+                shutil.copyfile(snippet.path, dest)
+                logger.info(
+                    "Preview snippet ready: %s (%.2fs)",
+                    dest,
+                    snippet.duration,
+                )
+                seen.add(dest)
 
-        audio = output_path
+        audio = preview_primary
         logger.info(
             "Continuing with transcription for preview snippet from %s", original_audio
         )
@@ -237,8 +259,13 @@ def main():
         PREC.compute_type = args.precise_compute_type
 
     # outdir (auto textN if not provided)
-    outdir = pathlib.Path(args.outdir).resolve() if args.outdir else next_outdir_for(str(audio), WR.out_prefix)
-    outdir.mkdir(parents=True, exist_ok=True)
+    if outdir is None:
+        outdir = (
+            pathlib.Path(args.outdir).expanduser().resolve()
+            if args.outdir
+            else next_outdir_for(str(audio), WR.out_prefix)
+        )
+        outdir.mkdir(parents=True, exist_ok=True)
     base = outdir / audio.stem
     logger.debug("Output directory resolved: %s", outdir)
     logger.debug("Output base path: %s", base)

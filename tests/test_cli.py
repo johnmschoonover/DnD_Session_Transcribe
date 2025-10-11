@@ -391,14 +391,18 @@ def test_main_renders_preview_and_transcribes_snippet(cli_module, monkeypatch, t
 
     monkeypatch.setattr(cli_module, "write_srt_vtt_txt_json", fake_write)
 
-    outdir = tmp_path / "preview-out"
-    monkeypatch.setattr(cli_module, "next_outdir_for", lambda audio_path, prefix: outdir)
-
     cli_module.main()
 
     assert preview_calls == [(audio, pytest.approx(1.5), pytest.approx(4.0))]
     assert output_path.exists()
-    assert copy_calls == [(str(snippet_path), str(output_path))]
-    assert run_asr_calls == [str(output_path)]
+    expected_outdir = tmp_path / f"preview_{cli_module.WR.out_prefix}0"
+    expected_preview = expected_outdir / f"{audio.stem}_preview.wav"
+    assert expected_outdir.exists()
+    assert copy_calls == [
+        (str(snippet_path), str(output_path)),
+        (str(snippet_path), str(expected_preview)),
+    ]
+    assert expected_preview.exists()
+    assert run_asr_calls == [str(expected_preview)]
     assert final_outputs
-    assert final_outputs[0][1].name == output_path.stem
+    assert final_outputs[0][1] == expected_outdir / expected_preview.stem
