@@ -280,3 +280,164 @@ def test_run_diarization_range_fallback_when_empty(monkeypatch, tmp_path):
     ]
     assert not df.empty
     assert set(df["speaker"]) == {"PLAYER_02", "PLAYER_03"}
+
+
+def test_run_diarization_no_overrides_when_pipeline_static(monkeypatch, tmp_path):
+    class _StaticInner:
+        def __init__(self) -> None:
+            self.instantiate_called = False
+
+        def parameters(self) -> dict[str, dict[str, float]]:
+            return {}
+
+        def instantiate(self, overrides: dict[str, dict[str, float]]):
+            self.instantiate_called = True
+            return self
+
+    class _StaticPipeline:
+        def __init__(self) -> None:
+            self.pipeline = _StaticInner()
+
+        def __call__(self, *args, **kwargs):
+            return [
+                {"start": 0.0, "end": 1.0, "label": "SPEAKER_05"},
+                {"start": 1.0, "end": 2.0, "label": "SPEAKER_06"},
+            ]
+
+    stub = _StaticPipeline()
+    monkeypatch.setattr(
+        "dnd_session_transcribe.features.diarization.make_diarization_pipeline",
+        lambda **_: stub,
+    )
+
+    cfg = DiarizationConfig(num_speakers=2)
+    df = run_diarization(
+        audio_path="clip.wav",
+        device="cpu",
+        cfg=cfg,
+        token="token",
+        audio_dur=3.5,
+        out_base=tmp_path / "static",
+        resume=False,
+    )
+
+    assert not stub.pipeline.instantiate_called
+    assert list(df["speaker"]) == ["PLAYER_05", "PLAYER_06"]
+
+
+def test_run_diarization_handles_parameter_probe_failures(monkeypatch, tmp_path):
+    class _BrokenInner:
+        def parameters(self):
+            raise RuntimeError("nope")
+
+        def instantiate(self, overrides):
+            pytest.fail("instantiate should not be reached when parameters() fails")
+
+    class _BrokenPipeline:
+        def __init__(self) -> None:
+            self.pipeline = _BrokenInner()
+
+        def __call__(self, *args, **kwargs):
+            return [
+                {"start": 0.0, "end": 0.5, "label": "SPEAKER_01"},
+            ]
+
+    monkeypatch.setattr(
+        "dnd_session_transcribe.features.diarization.make_diarization_pipeline",
+        lambda **_: _BrokenPipeline(),
+    )
+
+    df = run_diarization(
+        audio_path="clip.wav",
+        device="cpu",
+        cfg=DiarizationConfig(num_speakers=2),
+        token="token",
+        audio_dur=1.0,
+        out_base=tmp_path / "broken",
+        resume=False,
+    )
+
+    assert list(df["speaker"]) == ["PLAYER_01"]
+
+
+def test_run_diarization_wraps_pipeline_errors(monkeypatch, tmp_path):
+    class _BoomPipeline:
+        def __init__(self) -> None:
+            self.pipeline = _DummyInnerPipeline()
+
+        def __call__(self, *args, **kwargs):
+            raise RuntimeError("missing weights")
+
+    monkeypatch.setattr(
+        "dnd_session_transcribe.features.diarization.make_diarization_pipeline",
+        lambda **_: _BoomPipeline(),
+    )
+
+    with pytest.raises(SystemExit) as excinfo:
+        run_diarization(
+            audio_path="clip.wav",
+            device="cpu",
+            cfg=DiarizationConfig(num_speakers=2),
+            token="token",
+            audio_dur=2.0,
+            out_base=tmp_path / "boom",
+            resume=False,
+        )
+
+    assert "[diarize] failed" in str(excinfo.value)
+
+
+def test_run_diarization_defaults_to_single_speaker_when_empty(monkeypatch, tmp_path):
+    class _EmptyPipeline:
+        def __init__(self) -> None:
+            self.pipeline = _DummyInnerPipeline()
+
+        def __call__(self, *args, **kwargs):
+            return []
+
+    monkeypatch.setattr(
+        "dnd_session_transcribe.features.diarization.make_diarization_pipeline",
+        lambda **_: _EmptyPipeline(),
+    )
+
+    df = run_diarization(
+        audio_path="clip.wav",
+        device="cpu",
+        cfg=DiarizationConfig(num_speakers=2, allow_range_fallback=False),
+        token="token",
+        audio_dur=5.0,
+        out_base=tmp_path / "empty",
+        resume=False,
+    )
+
+    assert len(df) == 1
+    row = df.iloc[0]
+    assert row["speaker"] == "PLAYER00"
+    assert row["start"] == 0.0
+    assert row["end"] == pytest.approx(4.999)
+
+
+def test_run_diarization_defaults_to_empty_when_duration_zero(monkeypatch, tmp_path):
+    class _EmptyPipeline:
+        def __init__(self) -> None:
+            self.pipeline = _DummyInnerPipeline()
+
+        def __call__(self, *args, **kwargs):
+            return []
+
+    monkeypatch.setattr(
+        "dnd_session_transcribe.features.diarization.make_diarization_pipeline",
+        lambda **_: _EmptyPipeline(),
+    )
+
+    df = run_diarization(
+        audio_path="clip.wav",
+        device="cpu",
+        cfg=DiarizationConfig(num_speakers=2, allow_range_fallback=False),
+        token="token",
+        audio_dur=0.0,
+        out_base=tmp_path / "empty_zero",
+        resume=False,
+    )
+
+    assert df.empty

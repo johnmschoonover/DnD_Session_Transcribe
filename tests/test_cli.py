@@ -1,4 +1,6 @@
 import importlib
+import os
+import runpy
 import sys
 import types
 from pathlib import Path
@@ -282,7 +284,7 @@ def test_main_precise_rerun_replaces_segments(monkeypatch, cli_module, tmp_path)
     monkeypatch.setattr(cli_module, "run_alignment", lambda *args, **kwargs: [])
     monkeypatch.setattr(cli_module, "ensure_hf_token", lambda: "token")
 
-    dia_df = pd.DataFrame([{"start": 0.0, "end": 2.0, "speaker": "PLAYER_00"}])
+    dia_df = pd.DataFrame([{ "start": 0.0, "end": 2.0, "speaker": "PLAYER_00" }])
     monkeypatch.setattr(cli_module, "run_diarization", lambda *args, **kwargs: dia_df)
 
     cli_module.whisperx.assign_word_speakers = lambda dia, aligned: dia.to_dict("records")
@@ -352,3 +354,18 @@ def test_main_exits_when_diarization_empty(monkeypatch, cli_module, tmp_path):
         cli_module.main()
 
     assert "no speaker regions" in str(excinfo.value)
+
+
+def test_cli_entry_point_sets_pythonunbuffered(monkeypatch):
+    monkeypatch.delenv("PYTHONUNBUFFERED", raising=False)
+    monkeypatch.setattr(sys, "argv", ["dnd-transcribe", "--help"])
+
+    sys.modules.pop("dnd_session_transcribe.cli", None)
+    monkeypatch.setitem(sys.modules, "whisperx", types.SimpleNamespace(assign_word_speakers=lambda *args, **kwargs: []))
+    monkeypatch.setitem(sys.modules, "torch", _stub_torch())
+
+    with pytest.raises(SystemExit) as excinfo:
+        runpy.run_module("dnd_session_transcribe.cli", run_name="__main__", alter_sys=True)
+
+    assert excinfo.value.code == 0
+    assert os.environ["PYTHONUNBUFFERED"] == "1"

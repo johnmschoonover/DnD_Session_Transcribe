@@ -65,7 +65,10 @@ def test_run_asr_initializes_model_with_retry(asr_module, monkeypatch, tmp_path)
                 raise RuntimeError("bad precision")
 
         def transcribe(self, *args, **kwargs):
-            return [DummySegment(0.0, 1.25, "hello there")], {"language": "en"}
+            return [
+                DummySegment(0.0, 1.25, "hello there"),
+                DummySegment(1.25, 1.25, "echo"),
+            ], {"language": "en"}
 
     monkeypatch.setattr(asr_module, "WhisperModel", DummyModel)
 
@@ -91,7 +94,16 @@ def test_run_asr_initializes_model_with_retry(asr_module, monkeypatch, tmp_path)
             "avg_logprob": -0.5,
             "compression_ratio": 0.9,
             "no_speech_prob": 0.01,
-        }
+        },
+        {
+            "id": 1,
+            "start": 1.25,
+            "end": 1.25,
+            "text": "echo",
+            "avg_logprob": -0.5,
+            "compression_ratio": 0.9,
+            "no_speech_prob": 0.01,
+        },
     ]
 
     saved = Path(f"{tmp_path / 'clip'}_fw_segments_raw.json")
