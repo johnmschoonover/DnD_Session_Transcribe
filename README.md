@@ -58,7 +58,7 @@ Commonly used options (consult `dnd-transcribe --help` for the full list):
 - `--ram` – Copy the input audio to `/dev/shm` (tmpfs) for faster processing on systems with ample memory.
 - `--precise-rerun` – Enable the high-accuracy ASR pass over spans flagged as difficult after the first transcription.
 - `--vocal-extract {off,bandpass,mdx_kim2}` – Override the preprocessing strategy, including optional UVR5 separation via `mdx_kim2`.
-- `--num-speakers` – Override the diarization speaker count when the automatic estimate needs correction (defaults to 2 for the sample session so both voices are captured).
+- `--num-speakers` – Override the diarization speaker count when the automatic estimate needs correction.
 - `--resume` – Reuse cached JSON checkpoints to avoid recomputing completed stages.
 - `--hotwords-file`, `--initial-prompt-file`, `--spelling-map` – Provide customization files for ASR biasing and post-processing.
 - `--asr-model`, `--asr-device`, `--asr-compute-type` – Override the Faster-Whisper model id, device, or compute precision.
@@ -72,8 +72,6 @@ The default configuration targets GPU-equipped systems (`large-v3`, `cuda`, `flo
 dnd-transcribe sample_audio/test.wav \
   --asr-model tiny --asr-device cpu --asr-compute-type int8_float32
 ```
-
-The bundled `sample_audio/test.wav` alternates two distinct speakers, each repeating “Hi, Alex. This is me talking to you.” twice. The relaxed diarization defaults ensure both voices are assigned unique speaker tags without additional overrides.
 
 When enabling `--precise-rerun` on CPU, pair it with `--precise-model tiny --precise-device cpu --precise-compute-type float32` to avoid CUDA requirements.
 

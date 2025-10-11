@@ -90,7 +90,11 @@ def test_sample_clip_diarization_uses_two_speakers(monkeypatch, tmp_path):
         _fake_make_diarization_pipeline,
     )
 
-    cfg = DiarizationConfig()
+    cfg = DiarizationConfig(
+        num_speakers=2,
+        seg_min_off=0.05,
+        turn_min_off=0.05,
+    )
     duration = _load_audio_duration(audio_path)
 
     out_base = tmp_path / "sample"
