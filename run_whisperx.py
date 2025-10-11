@@ -9,19 +9,29 @@ import logging
 
 # --- progress bars ---
 from tqdm.auto import tqdm
+
 PROGRESS_STREAM = sys.stdout
 IS_TTY = PROGRESS_STREAM.isatty()
 
 # --- configs ---
 from constants import (
-    ASRConfig, DiarizationConfig, LoggingConfig, PreciseRerunConfig,
-    PreprocessConfig, ProfilesConfig, ScrubConfig, WritingConfig
+    ASRConfig,
+    DiarizationConfig,
+    LoggingConfig,
+    PreciseRerunConfig,
+    PreprocessConfig,
+    ProfilesConfig,
+    ScrubConfig,
+    WritingConfig,
 )
 
 # --- helpers (data helpers) ---
 from helpers import (
-    load_hotwords, load_initial_prompt,
-    load_spelling_map, apply_spelling_rules, atomic_json
+    load_hotwords,
+    load_initial_prompt,
+    load_spelling_map,
+    apply_spelling_rules,
+    atomic_json,
 )
 
 # --- utilities (infra helpers) ---
@@ -35,7 +45,7 @@ from utilities import (
     scrub_segments,
     find_hard_spans,
     splice_segments,
-    clamp_to_duration
+    clamp_to_duration,
 )
 
 # --- functions (core steps) ---
@@ -74,16 +84,42 @@ def parse_args():
         description="Faster-Whisper → WhisperX alignment → pyannote diarization"
     )
     ap.add_argument("audio", help="Path to input audio (wav/mp3/flac)")
-    ap.add_argument("--outdir", default=None, help="Output dir (default: auto textN next to audio)")
-    ap.add_argument("--ram", action="store_true", help="Copy audio to /dev/shm (tmpfs) for faster IO")
-    ap.add_argument("--resume", action="store_true", help="Reuse cached JSON checkpoints if present")
-    ap.add_argument("--num-speakers", type=int, default=None, help="Override speaker count")
-    ap.add_argument("--hotwords-file", default=None, help="Comma/line-separated hotwords file")
-    ap.add_argument("--initial-prompt-file", default=None, help="Short context prompt for first window")
-    ap.add_argument("--spelling-map", default=None, help="CSV wrong,right for post-correction")
-    ap.add_argument("--precise-rerun", action="store_true", help="Re-ASR hard spans with ultra-precise settings")
-    ap.add_argument("--vocal-extract", choices=["off", "bandpass", "mdx_kim2"], default=None,
-                    help="Override preprocessing (off/bandpass/mdx_kim2)")
+    ap.add_argument(
+        "--outdir", default=None, help="Output dir (default: auto textN next to audio)"
+    )
+    ap.add_argument(
+        "--ram",
+        action="store_true",
+        help="Copy audio to /dev/shm (tmpfs) for faster IO",
+    )
+    ap.add_argument(
+        "--resume", action="store_true", help="Reuse cached JSON checkpoints if present"
+    )
+    ap.add_argument(
+        "--num-speakers", type=int, default=None, help="Override speaker count"
+    )
+    ap.add_argument(
+        "--hotwords-file", default=None, help="Comma/line-separated hotwords file"
+    )
+    ap.add_argument(
+        "--initial-prompt-file",
+        default=None,
+        help="Short context prompt for first window",
+    )
+    ap.add_argument(
+        "--spelling-map", default=None, help="CSV wrong,right for post-correction"
+    )
+    ap.add_argument(
+        "--precise-rerun",
+        action="store_true",
+        help="Re-ASR hard spans with ultra-precise settings",
+    )
+    ap.add_argument(
+        "--vocal-extract",
+        choices=["off", "bandpass", "mdx_kim2"],
+        default=None,
+        help="Override preprocessing (off/bandpass/mdx_kim2)",
+    )
     ap.add_argument(
         "--log-level",
         choices=tuple(LOG_LEVELS.keys()),
@@ -94,13 +130,13 @@ def parse_args():
 
 
 # ====================== CONFIGS ========================
-ASR  = ASRConfig()
-DIA  = DiarizationConfig()
+ASR = ASRConfig()
+DIA = DiarizationConfig()
 PREC = PreciseRerunConfig(enabled=False)
-PRE  = PreprocessConfig()
-SCR  = ScrubConfig()
-WR   = WritingConfig()
-PROF = ProfilesConfig()   # reserved for profile matching
+PRE = PreprocessConfig()
+SCR = ScrubConfig()
+WR = WritingConfig()
+PROF = ProfilesConfig()  # reserved for profile matching
 
 
 # ======================= MAIN =======================
@@ -132,7 +168,11 @@ def main():
         raise SystemExit(f"Audio not found: {audio}")
 
     # outdir (auto textN if not provided)
-    outdir = pathlib.Path(args.outdir).resolve() if args.outdir else next_outdir_for(str(audio), WR.out_prefix)
+    outdir = (
+        pathlib.Path(args.outdir).resolve()
+        if args.outdir
+        else next_outdir_for(str(audio), WR.out_prefix)
+    )
     outdir.mkdir(parents=True, exist_ok=True)
     base = outdir / audio.stem
     logger.debug("Output directory resolved: %s", outdir)
@@ -169,7 +209,15 @@ def main():
     logger.debug("Total audio duration (s): %.2f", total_sec)
 
     # ---------------- ASR ----------------
-    fw_segments = run_asr(VOCAL_AUDIO, base, ASR, hotwords, init_prompt, resume=args.resume, total_sec=total_sec)
+    fw_segments = run_asr(
+        VOCAL_AUDIO,
+        base,
+        ASR,
+        hotwords,
+        init_prompt,
+        resume=args.resume,
+        total_sec=total_sec,
+    )
     fw_segments = scrub_segments(fw_segments, SCR)
     fw_segments = [s for s in fw_segments if s["end"] > s["start"]]
     atomic_json(f"{base}_fw_segments_scrubbed.json", {"segments": fw_segments})
@@ -178,25 +226,41 @@ def main():
     # ------------- precise re-run (optional) -------------
     if PREC.enabled:
         spans = find_hard_spans(
-            fw_segments, dur=total_sec,
-            logprob_thr=PREC.thr_logprob, cr_thr=PREC.thr_compratio,
-            nospeech_thr=PREC.thr_nospeech, pad=PREC.pad_s, merge_gap=PREC.merge_gap_s
+            fw_segments,
+            dur=total_sec,
+            logprob_thr=PREC.thr_logprob,
+            cr_thr=PREC.thr_compratio,
+            nospeech_thr=PREC.thr_nospeech,
+            pad=PREC.pad_s,
+            merge_gap=PREC.merge_gap_s,
         )
         logger.debug("Hard span candidates: %s", spans)
         if spans:
             total = sum(e - s for s, e in spans)
             logger.info(
                 "Precise rerun on %d span(s) (~%.1fs) using %s beam=%s patience=%s",
-                len(spans), total, PREC.model, PREC.beam_size, PREC.patience,
+                len(spans),
+                total,
+                PREC.model,
+                PREC.beam_size,
+                PREC.patience,
             )
             repl = rerun_precise_on_spans(
-                VOCAL_AUDIO, spans, "en", PREC.model, PREC.compute_type,
-                PREC.beam_size, PREC.patience, PREC.window_max_s
+                VOCAL_AUDIO,
+                spans,
+                "en",
+                PREC.model,
+                PREC.compute_type,
+                PREC.beam_size,
+                PREC.patience,
+                PREC.window_max_s,
             )
             fw_segments = splice_segments(fw_segments, repl)
             fw_segments = scrub_segments(fw_segments, SCR)
             fw_segments = [s for s in fw_segments if s["end"] > s["start"]]
-            atomic_json(f"{base}_fw_segments_after_precise.json", {"segments": fw_segments})
+            atomic_json(
+                f"{base}_fw_segments_after_precise.json", {"segments": fw_segments}
+            )
             logger.debug("Segments after precise rerun: %d", len(fw_segments))
         else:
             logger.info("Precise rerun skipped; no hard spans detected")
@@ -204,7 +268,7 @@ def main():
     # post-correct (optional)
     if sp_rules:
         for s in fw_segments:
-            s["text"] = apply_spelling_rules(s.get("text","") or "", sp_rules)
+            s["text"] = apply_spelling_rules(s.get("text", "") or "", sp_rules)
         atomic_json(f"{base}_fw_segments_postspell.json", {"segments": fw_segments})
         logger.info("Applied spelling map (%d rules)", len(sp_rules))
 
@@ -213,11 +277,15 @@ def main():
     torch.backends.cudnn.allow_tf32 = True
 
     fw_segments = clamp_to_duration(fw_segments, total_sec)
-    aligned = run_alignment(fw_segments, VOCAL_AUDIO, ASR.device, base, resume=args.resume)
+    aligned = run_alignment(
+        fw_segments, VOCAL_AUDIO, ASR.device, base, resume=args.resume
+    )
 
     # ---------------- diarization ----------------
     token = ensure_hf_token()
-    dia_df = run_diarization(VOCAL_AUDIO, ASR.device, DIA, token, total_sec, base, resume=args.resume)
+    dia_df = run_diarization(
+        VOCAL_AUDIO, ASR.device, DIA, token, total_sec, base, resume=args.resume
+    )
     if dia_df.empty:
         raise SystemExit("[diarize] no speaker regions produced")
 
