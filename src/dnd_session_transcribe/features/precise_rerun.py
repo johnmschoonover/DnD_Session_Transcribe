@@ -9,7 +9,7 @@ from typing import List, Tuple
 
 from faster_whisper import WhisperModel
 
-from ..adapters import ffmpeg_cut
+from ..adapters.ffmpeg import ffmpeg_cut
 
 # --- progress bars ---
 from tqdm.auto import tqdm
