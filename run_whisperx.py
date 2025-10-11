@@ -102,11 +102,8 @@ def parse_args():
         "--hotwords-file", default=None, help="Comma/line-separated hotwords file"
     )
     ap.add_argument(
-        "--initial-prompt-file",
-        default=None,
-        help="Short context prompt for first window",
+        "--initial-prompt-file", default=None, help="Short context prompt for first windowShort context prompt for first windowShort context prompt for first windowShort context prompt for first window",
     )
-    # asdf
     ap.add_argument(
         "--spelling-map", default=None, help="CSV wrong,right for post-correction"
     )
