@@ -69,3 +69,12 @@ def test_spelling_map_and_apply_rules(tmp_path):
         == "The goblin saw a goblin near the Elf King. "
         "Another Elf King lurked on a shelf."
     )
+
+
+def test_apply_spelling_rules_allows_literal_backslashes():
+    rules = [("DC", r"DC\\5"), ("AoE", r"Area\\Effect")]
+    text = "Maintain DC on the AoE zone."
+
+    updated = apply_spelling_rules(text, rules)
+
+    assert updated == r"Maintain DC\\5 on the Area\\Effect zone."
