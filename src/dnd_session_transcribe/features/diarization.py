@@ -52,6 +52,20 @@ def run_diarization(audio_path: str, device: str, cfg: DiarizationConfig,
         logger.debug("Loading diarization DataFrame from %s", dia_df_json)
         return pd.DataFrame(json.load(open(dia_df_json, "r", encoding="utf-8")))
 
+    if cfg.num_speakers <= 1:
+        logger.info("[diarize] skipping model inference; assuming single speaker")
+        df = pd.DataFrame(
+            [{
+                "start": 0.0,
+                "end": max(1e-3, audio_dur - 1e-3),
+                "speaker": f"{WR.speaker_tag_prefix}00",
+            }]
+        ) if audio_dur > 0 else pd.DataFrame(columns=["start", "end", "speaker"])
+        atomic_json(dia_df_json, df.to_dict(orient="records"))
+        logger.debug("Wrote diarization DataFrame to %s", dia_df_json)
+        logger.info("[diarize-prepare] rows=%d", len(df))
+        return df
+
     pipe = make_diarization_pipeline(token=token, device=device)
     logger.debug("Constructed diarization pipeline with token=%s device=%s", bool(token), device)
 
@@ -87,6 +101,19 @@ def run_diarization(audio_path: str, device: str, cfg: DiarizationConfig,
             df = normalize_diarization_to_df(ann, audio_dur, WR.speaker_tag_prefix)
     except Exception as e:
         raise SystemExit(f"[diarize] failed: {e}")
+
+    if df.empty:
+        logger.warning("[diarize] pipeline returned no regions; defaulting to single speaker")
+        if audio_dur <= 0:
+            df = pd.DataFrame(columns=["start", "end", "speaker"])
+        else:
+            df = pd.DataFrame(
+                [{
+                    "start": 0.0,
+                    "end": max(1e-3, audio_dur - 1e-3),
+                    "speaker": f"{WR.speaker_tag_prefix}00",
+                }]
+            )
 
     atomic_json(dia_df_json, df.to_dict(orient="records"))
     logger.debug("Wrote diarization DataFrame to %s", dia_df_json)

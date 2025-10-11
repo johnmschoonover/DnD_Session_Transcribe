@@ -24,11 +24,12 @@ def rerun_precise_on_spans(
     lang: str,
     model: str,
     compute: str,
+    device: str,
     beam: int,
     patience: float,
     max_window_s: float,
 ) -> List[Tuple[float, float, List[dict]]]:
-    precise = WhisperModel(model, device="cuda", compute_type=compute)
+    precise = WhisperModel(model, device=device, compute_type=compute)
     replacements: List[Tuple[float, float, List[dict]]] = []
 
     total_precise = sum(e - s for (s, e) in spans)

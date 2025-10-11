@@ -6,6 +6,7 @@ class PreciseRerunConfig:
     enabled: bool = False            # set True to always re-run hard spans
     model: str = "large-v3"
     compute_type: str = "float16"
+    device: str = "cuda"
     beam_size: int = 16
     patience: float = 2.0
     window_max_s: float = 60.0       # split long spans into ≤ this
