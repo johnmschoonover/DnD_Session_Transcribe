@@ -1,17 +1,7 @@
-import importlib.util
 import json
-import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
-
-MODULE_PATH = REPO_ROOT / "utilities" / "write_files.py"
-_spec = importlib.util.spec_from_file_location("write_files_module", MODULE_PATH)
-write_files = importlib.util.module_from_spec(_spec)
-assert _spec and _spec.loader is not None
-_spec.loader.exec_module(write_files)
+from dnd_session_transcribe.util.write_files import write_srt_vtt_txt_json
 
 
 def test_write_srt_vtt_txt_json(tmp_path, monkeypatch):
@@ -35,7 +25,7 @@ def test_write_srt_vtt_txt_json(tmp_path, monkeypatch):
     }
 
     base: Path = tmp_path / "transcript"
-    write_files.write_srt_vtt_txt_json(final, base)
+    write_srt_vtt_txt_json(final, base)
 
     srt_path = base.with_suffix(".srt")
     vtt_path = base.with_suffix(".vtt")

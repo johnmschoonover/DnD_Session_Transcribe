@@ -1,16 +1,6 @@
-from importlib import util
-from pathlib import Path
-
 import pytest
 
-ROOT_DIR = Path(__file__).resolve().parents[2]
-MODULE_PATH = ROOT_DIR / "utilities" / "huggingface.py"
-SPEC = util.spec_from_file_location("utilities.huggingface", MODULE_PATH)
-huggingface = util.module_from_spec(SPEC)
-if SPEC and SPEC.loader:
-    SPEC.loader.exec_module(huggingface)
-else:
-    raise RuntimeError("Failed to load utilities.huggingface module")
+from dnd_session_transcribe.adapters import huggingface
 
 
 HF_TOKEN_ENV = huggingface.HF_TOKEN_ENV

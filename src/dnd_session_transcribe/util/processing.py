@@ -1,9 +1,11 @@
 import torch
-import whisperx
 import logging
 from typing import List, Tuple
 
-from constants import ScrubConfig
+import torch
+import whisperx
+
+from .config import ScrubConfig
 
 
 logger = logging.getLogger(__name__)

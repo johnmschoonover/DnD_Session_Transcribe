@@ -1,6 +1,6 @@
-# helpers/__init__.py
+# Helper subpackage exports.
 # Re-export helper functions so callers can do:
-#   from helpers import build_vad_params, load_hotwords, ...
+#   from dnd_session_transcribe.util.helpers import build_vad_params, ...
 
 from .vad import build_vad_params
 from .hotwords import load_hotwords

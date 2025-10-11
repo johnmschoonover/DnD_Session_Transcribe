@@ -1,6 +1,6 @@
-# constants/__init__.py
+# Config dataclass exports.
 # Re-export config dataclasses so callers can do:
-#   from constants import ASRConfig, DiarizationConfig, PreciseRerunConfig, ...
+#   from dnd_session_transcribe.util.config import ASRConfig, ...
 
 from .asr import ASRConfig
 from .diarization import DiarizationConfig
