@@ -88,8 +88,8 @@ def parse_args():
                     help="Select device for the precise rerun (default: config)")
     ap.add_argument("--precise-compute-type", default=None,
                     help="Override compute type for the precise rerun")
-    ap.add_argument("--vocal-extract", choices=["off", "bandpass", "mdx_kim2"], default=None,
-                    help="Override preprocessing (off/bandpass/mdx_kim2)")
+    ap.add_argument("--vocal-extract", choices=["off", "bandpass"], default=None,
+                    help="Override preprocessing (off/bandpass)")
     ap.add_argument(
         "--log-level",
         choices=tuple(LOG_LEVELS.keys()),
