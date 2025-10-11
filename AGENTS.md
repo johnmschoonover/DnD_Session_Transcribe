@@ -112,7 +112,7 @@ Include in PR:
 These notes summarize the prior AGENTS guidelines. They are retained for institutional memory and supplemental context; if any instruction conflicts with Sections 1–9 above, follow the playbook rules first.
 
 ### Installation & CLI
-- Install the project in editable mode for development: `pip install -e .[uvr5]` (add `--extra-index-url` if CUDA wheels are needed).
+- Install the project in editable mode for development: `pip install -e .` (add `--extra-index-url` if CUDA wheels are needed).
 - Use the CLI entry point `dnd-transcribe` defined in `src/dnd_session_transcribe/cli.py` for smoke tests (e.g., `dnd-transcribe --help`). Avoid legacy scripts like `python run_whisperx.py`.
 - Import configuration via `dnd_session_transcribe.util.config`; do not assume a working directory or mutate defaults in place.
 - Runtime defaults emphasize GPU-friendly Faster-Whisper settings. When CPU- or memory-constrained, surface overrides through CLI flags instead of editing defaults.
