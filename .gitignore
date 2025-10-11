@@ -4,3 +4,5 @@ audio_profiles/
 @eaDir
 .DS_Store
 __pycache__/
+.coverage
+*.egg-info/
