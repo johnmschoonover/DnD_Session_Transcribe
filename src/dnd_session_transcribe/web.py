@@ -11,6 +11,7 @@ import os
 import re
 import secrets
 import shutil
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable, Optional
@@ -86,13 +87,24 @@ def build_cli_args(
 
 
 def _write_json(path: Path, data: dict[str, Any]) -> None:
-    path.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
+    serialized = json.dumps(data, indent=2, sort_keys=True)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        "w", encoding="utf-8", dir=path.parent, delete=False
+    ) as tmp_file:
+        tmp_file.write(serialized)
+        temp_name = tmp_file.name
+    os.replace(temp_name, path)
 
 
 def _read_json(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
-    return json.loads(path.read_text(encoding="utf-8"))
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        LOGGER.warning("Failed to parse JSON from %s: %s", path, exc)
+        return {}
 
 
 def _job_status_template(job_id: str, created_at: str) -> dict[str, Any]:
@@ -466,7 +478,14 @@ def create_app(base_dir: Optional[Path] = None) -> FastAPI:
             )
             status["status"] = "completed"
             if resolved_outdir is not None:
-                status["output_dir"] = str(resolved_outdir)
+                resolved_outdir_str = str(resolved_outdir)
+                status["output_dir"] = resolved_outdir_str
+
+                metadata_path = job_dir / "metadata.json"
+                metadata = _read_json(metadata_path)
+                if metadata.get("output_dir") != resolved_outdir_str:
+                    metadata["output_dir"] = resolved_outdir_str
+                    _write_json(metadata_path, metadata)
             status["updated_at"] = _utc_now()
             _write_json(job_dir / "status.json", status)
         except BaseException as exc:  # pylint: disable=broad-except

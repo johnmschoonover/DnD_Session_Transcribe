@@ -168,6 +168,59 @@ def test_transcribe_redirects_home_and_lists_job(
         assert job_dir.name in dashboard_html
 
 
+def test_transcribe_preview_updates_output_directory(
+    tmp_path: Path, monkeypatch
+) -> None:
+    app = web.create_app(tmp_path)
+
+    def fake_run_transcription(args, configure_logging=False, log_handlers=None):  # type: ignore[override]
+        requested_outdir = Path(args.outdir)
+        preview_dir = requested_outdir.parent / f"preview_{requested_outdir.name}"
+        preview_dir.mkdir(parents=True, exist_ok=True)
+        preview_file = preview_dir / "session_preview.wav"
+        preview_file.write_text("preview", encoding="utf-8")
+        return preview_dir
+
+    monkeypatch.setattr(web.cli, "run_transcription", fake_run_transcription)
+
+    with TestClient(app, follow_redirects=False) as client:
+        response = client.post(
+            "/transcribe",
+            data={
+                "log_level": web.cli.LOG.level,
+                "preview_enabled": "1",
+                "preview_start": "2",
+                "preview_duration": "5",
+            },
+            files={"audio_file": ("session.wav", b"fake-bytes", "audio/wav")},
+        )
+
+        assert response.status_code == 303
+
+        job_dirs = [p for p in tmp_path.iterdir() if p.is_dir()]
+        assert job_dirs, "expected job directory to be created"
+        job_dir = job_dirs[0]
+        status_path = job_dir / "status.json"
+
+        status: dict[str, object] | None = None
+        for _ in range(50):
+            raw = status_path.read_text(encoding="utf-8")
+            if raw.strip():
+                parsed = json.loads(raw)
+                if parsed.get("status") == "completed":
+                    status = parsed
+                    break
+            time.sleep(0.05)
+
+        assert status is not None, "job did not complete"
+        expected_preview_dir = job_dir / "preview_outputs"
+        assert status["output_dir"] == str(expected_preview_dir)
+
+        job_page = client.get(f"/runs/{job_dir.name}").text
+        assert "session_preview.wav" in job_page
+        assert f"/runs/{job_dir.name}/files/preview_outputs/session_preview.wav" in job_page
+
+
 def test_delete_job_removes_directory(tmp_path: Path) -> None:
     app = web.create_app(tmp_path)
     job_id = "job-delete"
@@ -185,3 +238,14 @@ def test_delete_job_removes_directory(tmp_path: Path) -> None:
     assert response.status_code == 303
     assert response.headers["location"] == f"/?message=Deleted+job+{job_id}"
     assert not job_dir.exists()
+
+
+def test_read_json_handles_partial_file(tmp_path: Path, caplog) -> None:
+    path = tmp_path / "broken.json"
+    path.write_text("{\"status\":", encoding="utf-8")
+
+    with caplog.at_level("WARNING"):
+        parsed = web._read_json(path)
+
+    assert parsed == {}
+    assert "Failed to parse JSON" in caplog.text
