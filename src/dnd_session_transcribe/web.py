@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import functools
 import html
 import json
 import logging
@@ -17,7 +18,7 @@ from pathlib import Path
 from typing import Any, Iterable, Optional
 from urllib.parse import quote, quote_plus
 
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 
 from . import cli
@@ -129,6 +130,65 @@ def _checkbox_to_bool(value: Optional[str]) -> bool:
     return value.lower() not in {"0", "false", "off"}
 
 
+def _job_config_block(index: str, *, removable: bool) -> str:
+    """Return the HTML for an individual job configuration block."""
+
+    prefix = f"job-{index}-"
+    log_level_options = "".join(
+        f"<option value='{level}'{' selected' if level == cli.LOG.level else ''}>{level}</option>"
+        for level in cli.LOG_LEVELS
+    )
+
+    remove_button = (
+        "<button type=\"button\" class=\"remove-job secondary-button\">Remove</button>"
+        if removable
+        else ""
+    )
+
+    return (
+        "<div class=\"job-config\" data-job-index=\""
+        + html.escape(index)
+        + "\">"
+        + "<div class=\"job-config-header\">"
+        + "<h3>Configuration <span class=\"job-number\"></span></h3>"
+        + remove_button
+        + "</div>"
+        + f"<label for=\"{prefix}log_level\">Log level</label>"
+        + f"<select id=\"{prefix}log_level\" name=\"{prefix}log_level\">{log_level_options}</select>"
+        + f"<label for=\"{prefix}asr_model\">Faster-Whisper model override (optional)</label>"
+        + f"<input id=\"{prefix}asr_model\" name=\"{prefix}asr_model\" type=\"text\" placeholder=\"e.g. tiny, base, large-v3\" />"
+        + f"<label for=\"{prefix}num_speakers\">Number of speakers (optional)</label>"
+        + f"<input id=\"{prefix}num_speakers\" name=\"{prefix}num_speakers\" type=\"text\" inputmode=\"numeric\" placeholder=\"e.g. 4\" />"
+        + f"<label for=\"{prefix}asr_device\">ASR device override</label>"
+        + f"<select id=\"{prefix}asr_device\" name=\"{prefix}asr_device\">"
+        + "<option value=\"\">(default)</option>"
+        + "<option value=\"cpu\">cpu</option>"
+        + "<option value=\"cuda\">cuda</option>"
+        + "<option value=\"mps\">mps</option>"
+        + "</select>"
+        + f"<label for=\"{prefix}asr_compute_type\">ASR compute type override</label>"
+        + f"<input id=\"{prefix}asr_compute_type\" name=\"{prefix}asr_compute_type\" type=\"text\" placeholder=\"e.g. float16\" />"
+        + f"<label for=\"{prefix}vocal_extract\">Preprocessing</label>"
+        + f"<select id=\"{prefix}vocal_extract\" name=\"{prefix}vocal_extract\">"
+        + "<option value=\"\">(default)</option>"
+        + "<option value=\"off\">off</option>"
+        + "<option value=\"bandpass\">bandpass</option>"
+        + "</select>"
+        + "<div class=\"preview-box\">"
+        + f"<label><input type=\"checkbox\" id=\"{prefix}preview_enabled\" name=\"{prefix}preview_enabled\" value=\"true\" /> Render preview snippet</label>"
+        + f"<label for=\"{prefix}preview_start\">Preview start (seconds or MM:SS)</label>"
+        + f"<input id=\"{prefix}preview_start\" name=\"{prefix}preview_start\" type=\"text\" placeholder=\"e.g. 1:30\" />"
+        + f"<label for=\"{prefix}preview_duration\">Preview duration (seconds)</label>"
+        + f"<input id=\"{prefix}preview_duration\" name=\"{prefix}preview_duration\" type=\"text\" placeholder=\"default: 10\" />"
+        + "<div class=\"help-text\">When enabled, the snippet audio and transcripts will be generated alongside the full outputs.</div>"
+        + "</div>"
+        + "<div class=\"job-checkboxes\">"
+        + f"<label><input type=\"checkbox\" name=\"{prefix}resume\" value=\"true\" /> Resume from cached checkpoints</label>"
+        + f"<label><input type=\"checkbox\" name=\"{prefix}precise_rerun\" value=\"true\" /> Enable precise re-run</label>"
+        + "</div>"
+        + "</div>"
+    )
+
 def _build_home_html(jobs: Iterable[dict[str, Any]], message: str | None = None) -> str:
     rows = []
     for job in jobs:
@@ -154,6 +214,9 @@ def _build_home_html(jobs: Iterable[dict[str, Any]], message: str | None = None)
         )
 
     message_html = f"<div class='message'>{html.escape(message)}</div>" if message else ""
+
+    initial_job_block = _job_config_block("0", removable=False)
+    template_job_block = _job_config_block("__INDEX__", removable=True)
 
     return f"""
 <!DOCTYPE html>
@@ -181,6 +244,15 @@ def _build_home_html(jobs: Iterable[dict[str, Any]], message: str | None = None)
     .inline-form {{ display: inline; }}
     .delete-button {{ background: #cf222e; margin-top: 0; }}
     .delete-button:hover {{ background: #a40e26; }}
+    .job-configs {{ margin-top: 1.5rem; }}
+    .job-config {{ margin-top: 1rem; padding: 1rem; background: #fff; border: 1px solid #d0d7de; border-radius: 6px; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }}
+    .job-config + .job-config {{ margin-top: 1rem; }}
+    .job-config-header {{ display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.75rem; }}
+    .job-config h3 {{ margin: 0; font-size: 1.05rem; }}
+    .job-checkboxes label {{ font-weight: 500; margin-top: 0.5rem; }}
+    .secondary-button {{ background: #57606a; margin-top: 0; }}
+    .secondary-button:hover {{ background: #444c56; }}
+    .job-controls {{ margin-top: 0.75rem; }}
   </style>
 </head>
 <body>
@@ -190,50 +262,14 @@ def _build_home_html(jobs: Iterable[dict[str, Any]], message: str | None = None)
     <fieldset>
       <label for=\"audio_file\">Audio file</label>
       <input id=\"audio_file\" name=\"audio_file\" type=\"file\" required />
-
-      <label for=\"log_level\">Log level</label>
-      <select id=\"log_level\" name=\"log_level\">
-        {''.join(f"<option value='{level}'>{level}</option>" for level in cli.LOG_LEVELS)}
-      </select>
-
-      <label for=\"asr_model\">Faster-Whisper model override (optional)</label>
-      <input id=\"asr_model\" name=\"asr_model\" type=\"text\" placeholder=\"e.g. tiny, base, large-v3\" />
-
-      <label for=\"num_speakers\">Number of speakers (optional)</label>
-      <input id=\"num_speakers\" name=\"num_speakers\" type=\"text\" inputmode=\"numeric\" placeholder=\"e.g. 4\" />
-
-      <label for=\"asr_device\">ASR device override</label>
-      <select id=\"asr_device\" name=\"asr_device\">
-        <option value=\"\">(default)</option>
-        <option value=\"cpu\">cpu</option>
-        <option value=\"cuda\">cuda</option>
-        <option value=\"mps\">mps</option>
-      </select>
-
-      <label for=\"asr_compute_type\">ASR compute type override</label>
-      <input id=\"asr_compute_type\" name=\"asr_compute_type\" type=\"text\" placeholder=\"e.g. float16\" />
-
-      <label for=\"vocal_extract\">Preprocessing</label>
-      <select id=\"vocal_extract\" name=\"vocal_extract\">
-        <option value=\"\">(default)</option>
-        <option value=\"off\">off</option>
-        <option value=\"bandpass\">bandpass</option>
-      </select>
-
-      <div class=\"preview-box\">
-        <label><input type=\"checkbox\" name=\"preview_enabled\" value=\"true\" /> Render preview snippet</label>
-        <label for=\"preview_start\">Preview start (seconds or MM:SS)</label>
-        <input id=\"preview_start\" name=\"preview_start\" type=\"text\" placeholder=\"e.g. 1:30\" />
-        <label for=\"preview_duration\">Preview duration (seconds)</label>
-        <input id=\"preview_duration\" name=\"preview_duration\" type=\"text\" placeholder=\"default: 10\" />
-        <div class=\"help-text\">When enabled, the snippet audio and transcripts will be generated alongside the full outputs.</div>
-      </div>
-
-      <div style=\"margin-top: 0.75rem;\">
-        <label><input type=\"checkbox\" name=\"resume\" value=\"true\" /> Resume from cached checkpoints</label>
-      </div>
-      <div>
-        <label><input type=\"checkbox\" name=\"precise_rerun\" value=\"true\" /> Enable precise re-run</label>
+      <div class=\"job-configs\">
+        <p class=\"help-text\">Configure one or more jobs with different settings to compare their outputs. Each job will reuse the uploaded audio file.</p>
+        <div id=\"jobs-container\">
+          {initial_job_block}
+        </div>
+        <div class=\"job-controls\">
+          <button type=\"button\" id=\"add-job\" class=\"secondary-button\">Add another configuration</button>
+        </div>
       </div>
     </fieldset>
     <button type=\"submit\">Start transcription</button>
@@ -246,6 +282,66 @@ def _build_home_html(jobs: Iterable[dict[str, Any]], message: str | None = None)
       {''.join(rows) if rows else "<tr><td colspan='6'>No jobs yet.</td></tr>"}
     </tbody>
   </table>
+  <template id=\"job-template\">
+    {template_job_block}
+  </template>
+  <script>
+    (function() {{
+      const container = document.getElementById('jobs-container');
+      const template = document.getElementById('job-template');
+      const addButton = document.getElementById('add-job');
+      if (!container || !template || !addButton) {{
+        return;
+      }}
+
+      let nextIndex = container.querySelectorAll('.job-config').length;
+
+      function renumber() {{
+        const blocks = container.querySelectorAll('.job-config');
+        blocks.forEach((block, idx) => {{
+          const numberEl = block.querySelector('.job-number');
+          if (numberEl) {{
+            numberEl.textContent = String(idx + 1);
+          }}
+        }});
+      }}
+
+      addButton.addEventListener('click', () => {{
+        const markup = template.innerHTML.replace(/__INDEX__/g, String(nextIndex));
+        const wrapper = document.createElement('div');
+        wrapper.innerHTML = markup.trim();
+        const newBlock = wrapper.firstElementChild;
+        if (!newBlock) {{
+          return;
+        }}
+        container.appendChild(newBlock);
+        nextIndex += 1;
+        renumber();
+      }});
+
+      container.addEventListener('click', (event) => {{
+        const target = event.target;
+        if (!(target instanceof Element)) {{
+          return;
+        }}
+        if (!target.classList.contains('remove-job')) {{
+          return;
+        }}
+        event.preventDefault();
+        const block = target.closest('.job-config');
+        if (!block) {{
+          return;
+        }}
+        if (container.querySelectorAll('.job-config').length <= 1) {{
+          return;
+        }}
+        block.remove();
+        renumber();
+      }});
+
+      renumber();
+    }})();
+  </script>
 </body>
 </html>
 """
@@ -514,141 +610,246 @@ def create_app(base_dir: Optional[Path] = None) -> FastAPI:
         return _build_home_html(jobs, message)
 
     @app.post("/transcribe")
-    async def transcribe(
-        audio_file: UploadFile = File(...),
-        log_level: str = Form(cli.LOG.level),
-        asr_model: str = Form(""),
-        num_speakers: str = Form(""),
-        asr_device: str = Form(""),
-        asr_compute_type: str = Form(""),
-        vocal_extract: str = Form(""),
-        resume: Optional[str] = Form(None),
-        precise_rerun: Optional[str] = Form(None),
-        preview_enabled: Optional[str] = Form(None),
-        preview_start: str = Form(""),
-        preview_duration: str = Form(""),
-    ) -> RedirectResponse:
+    async def transcribe(request: Request, audio_file: UploadFile = File(...)) -> RedirectResponse:
         if not audio_file.filename:
             raise HTTPException(status_code=400, detail="Audio file is required")
 
-        job_id = _generate_job_id()
-        job_dir = _job_dir(job_id)
-        job_dir.mkdir(parents=True, exist_ok=True)
-        (job_dir / "inputs").mkdir(exist_ok=True)
-        outputs_dir = job_dir / "outputs"
-        outputs_dir.mkdir(exist_ok=True)
+        form_data = await request.form()
+        form_values: dict[str, Any] = {}
+        for key, value in form_data.multi_items():
+            if key == "audio_file":
+                continue
+            form_values[key] = value
+
+        job_indices: list[str | None] = []
+        seen_indices: set[str] = set()
+        for key in form_values:
+            if not key.startswith("job-"):
+                continue
+            parts = key.split("-", 2)
+            if len(parts) < 3:
+                continue
+            idx = parts[1]
+            if idx and idx not in seen_indices and idx.isdigit():
+                seen_indices.add(idx)
+                job_indices.append(idx)
+
+        job_indices.sort(key=lambda item: int(item))
+
+        if not job_indices:
+            job_indices = [None]
+
+        temp_audio_path: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile("wb", delete=False) as tmp_file:
+                while chunk := await audio_file.read(1024 * 1024):
+                    tmp_file.write(chunk)
+                temp_audio_path = Path(tmp_file.name)
+        finally:
+            await audio_file.close()
+
+        if temp_audio_path is None:
+            raise HTTPException(status_code=400, detail="Failed to read audio file")
 
         clean_name = safe_filename(audio_file.filename)
-        audio_path = job_dir / "inputs" / clean_name
-        with audio_path.open("wb") as buffer:
-            while chunk := await audio_file.read(1024 * 1024):
-                buffer.write(chunk)
-        await audio_file.close()
 
-        created_at = _utc_now()
-        preview_fields_supplied = preview_start.strip() or preview_duration.strip()
-        preview_requested = _checkbox_to_bool(preview_enabled) or bool(preview_fields_supplied)
+        def _field_key(job_idx: str | None, name: str) -> str:
+            return f"job-{job_idx}-{name}" if job_idx is not None else name
 
-        preview_start_arg: Optional[float]
-        preview_duration_arg: Optional[float]
-        preview_meta: dict[str, Any] = {"requested": preview_requested}
+        def _get_value(job_idx: str | None, name: str, default: str = "") -> str:
+            key = _field_key(job_idx, name)
+            raw = form_values.get(key, default)
+            if isinstance(raw, str):
+                return raw
+            return default if raw is None else str(raw)
 
-        if preview_requested:
-            start_text = preview_start.strip()
-            duration_text = preview_duration.strip()
-            try:
-                start_value = (
-                    cli.parse_time_spec(start_text)
-                    if start_text
-                    else 0.0
-                )
-            except ValueError:
-                raise HTTPException(status_code=400, detail="Invalid preview_start value") from None
+        def _get_checkbox(job_idx: str | None, name: str) -> bool:
+            key = _field_key(job_idx, name)
+            if key not in form_values:
+                return False
+            raw = form_values[key]
+            return _checkbox_to_bool(str(raw))
 
-            try:
-                duration_value = (
-                    cli.parse_time_spec(duration_text)
-                    if duration_text
-                    else 10.0
-                )
-            except ValueError:
-                raise HTTPException(status_code=400, detail="Invalid preview_duration value") from None
-
-            if duration_value <= 0:
-                raise HTTPException(status_code=400, detail="Preview duration must be positive")
-
-            preview_start_arg = start_value
-            preview_duration_arg = duration_value
-            preview_meta.update({"start": start_value, "duration": duration_value})
-        else:
-            preview_start_arg = None
-            preview_duration_arg = None
-
-        parsed_num_speakers: Optional[int]
         try:
-            parsed_num_speakers = int(num_speakers) if num_speakers.strip() else None
-        except ValueError:
-            raise HTTPException(status_code=400, detail="num_speakers must be an integer") from None
+            job_plans: list[dict[str, Any]] = []
 
-        if log_level not in cli.LOG_LEVELS:
-            raise HTTPException(status_code=400, detail="Invalid log level")
+            for order, index in enumerate(job_indices):
+                job_id = _generate_job_id()
+                job_dir = _job_dir(job_id)
+                inputs_dir = job_dir / "inputs"
+                outputs_dir = job_dir / "outputs"
+                audio_target = inputs_dir / clean_name
 
-        vocal_choice = vocal_extract or None
-        if vocal_choice not in {None, "off", "bandpass"}:
-            raise HTTPException(status_code=400, detail="Invalid vocal_extract value")
+                def _detail(message: str) -> str:
+                    return f"{message} for configuration {order + 1}"
 
-        resume_enabled = _checkbox_to_bool(resume)
-        precise_rerun_enabled = _checkbox_to_bool(precise_rerun)
+                log_level_value = _get_value(index, "log_level", cli.LOG.level).strip()
+                log_level_value = log_level_value or cli.LOG.level
+                if log_level_value not in cli.LOG_LEVELS:
+                    raise HTTPException(status_code=400, detail=_detail("Invalid log level"))
 
-        args = build_cli_args(
-            audio_path,
-            outdir=outputs_dir,
-            resume=resume_enabled,
-            num_speakers=parsed_num_speakers,
-            asr_model=asr_model or None,
-            asr_device=asr_device or None,
-            asr_compute_type=asr_compute_type or None,
-            precise_rerun=precise_rerun_enabled,
-            vocal_extract=vocal_choice,
-            log_level=log_level,
-            preview_start=preview_start_arg,
-            preview_duration=preview_duration_arg,
-        )
+                asr_model_value = _get_value(index, "asr_model").strip()
+                num_speakers_text = _get_value(index, "num_speakers").strip()
+                asr_device_value = _get_value(index, "asr_device").strip()
+                asr_compute_type_value = _get_value(index, "asr_compute_type").strip()
+                vocal_extract_value = _get_value(index, "vocal_extract").strip()
 
-        settings_snapshot = {
-            key: (str(val) if isinstance(val, Path) else val)
-            for key, val in vars(args).items()
-        }
-        settings_snapshot["preview_requested"] = preview_requested
+                parsed_num_speakers: Optional[int]
+                if num_speakers_text:
+                    try:
+                        parsed_num_speakers = int(num_speakers_text)
+                    except ValueError:
+                        raise HTTPException(status_code=400, detail=_detail("num_speakers must be an integer")) from None
+                else:
+                    parsed_num_speakers = None
 
-        metadata = {
-            "job_id": job_id,
-            "audio_filename": audio_file.filename,
-            "created_at": created_at,
-            "preview": preview_meta,
-            "settings": settings_snapshot,
-        }
-        _write_json(job_dir / "metadata.json", metadata)
+                vocal_choice = vocal_extract_value or None
+                if vocal_choice not in {None, "off", "bandpass"}:
+                    raise HTTPException(status_code=400, detail=_detail("Invalid vocal_extract value"))
 
-        status_snapshot = _job_status_template(job_id, created_at)
-        status_snapshot["audio_filename"] = audio_file.filename
-        _write_json(job_dir / "status.json", status_snapshot)
+                resume_enabled = _get_checkbox(index, "resume")
+                precise_rerun_enabled = _get_checkbox(index, "precise_rerun")
+                preview_enabled_flag = _get_checkbox(index, "preview_enabled")
+                preview_start_text = _get_value(index, "preview_start").strip()
+                preview_duration_text = _get_value(index, "preview_duration").strip()
 
-        loop = asyncio.get_running_loop()
+                preview_fields_supplied = bool(preview_start_text or preview_duration_text)
+                preview_requested = preview_enabled_flag or preview_fields_supplied
+                preview_meta: dict[str, Any] = {"requested": preview_requested}
 
-        def _consume_future(fut: asyncio.Future[Any]) -> None:
-            try:
-                fut.result()
-            except SystemExit:
-                LOGGER.info("Job %s exited early", job_id)
-            except Exception:  # pylint: disable=broad-except
-                LOGGER.exception("Job %s raised an exception during execution", job_id)
+                preview_start_arg: Optional[float]
+                preview_duration_arg: Optional[float]
+                if preview_requested:
+                    try:
+                        start_value = (
+                            cli.parse_time_spec(preview_start_text)
+                            if preview_start_text
+                            else 0.0
+                        )
+                    except ValueError:
+                        raise HTTPException(status_code=400, detail=_detail("Invalid preview_start value")) from None
 
-        future = loop.run_in_executor(None, _run_job, args, job_id, job_dir, created_at)
-        future.add_done_callback(_consume_future)
+                    try:
+                        duration_value = (
+                            cli.parse_time_spec(preview_duration_text)
+                            if preview_duration_text
+                            else 10.0
+                        )
+                    except ValueError:
+                        raise HTTPException(status_code=400, detail=_detail("Invalid preview_duration value")) from None
 
-        message = quote_plus(f"Started job {job_id}")
-        return RedirectResponse(url=f"/?message={message}", status_code=303)
+                    if duration_value <= 0:
+                        raise HTTPException(status_code=400, detail=_detail("Preview duration must be positive"))
+
+                    preview_start_arg = start_value
+                    preview_duration_arg = duration_value
+                    preview_meta.update({"start": start_value, "duration": duration_value})
+                else:
+                    preview_start_arg = None
+                    preview_duration_arg = None
+
+                args = build_cli_args(
+                    audio_target,
+                    outdir=outputs_dir,
+                    resume=resume_enabled,
+                    num_speakers=parsed_num_speakers,
+                    asr_model=asr_model_value or None,
+                    asr_device=asr_device_value or None,
+                    asr_compute_type=asr_compute_type_value or None,
+                    precise_rerun=precise_rerun_enabled,
+                    vocal_extract=vocal_choice,
+                    log_level=log_level_value,
+                    preview_start=preview_start_arg,
+                    preview_duration=preview_duration_arg,
+                )
+
+                settings_snapshot = {
+                    key: (str(val) if isinstance(val, Path) else val)
+                    for key, val in vars(args).items()
+                }
+                settings_snapshot["preview_requested"] = preview_requested
+                settings_snapshot["batch_index"] = order
+                settings_snapshot["job_index"] = index
+
+                created_at = _utc_now()
+                status_snapshot = _job_status_template(job_id, created_at)
+                status_snapshot["audio_filename"] = audio_file.filename
+
+                metadata = {
+                    "job_id": job_id,
+                    "audio_filename": audio_file.filename,
+                    "created_at": created_at,
+                    "preview": preview_meta,
+                    "settings": settings_snapshot,
+                    "batch_index": order,
+                    "job_index": index,
+                }
+
+                job_plans.append(
+                    {
+                        "job_id": job_id,
+                        "job_dir": job_dir,
+                        "inputs_dir": inputs_dir,
+                        "outputs_dir": outputs_dir,
+                        "audio_path": audio_target,
+                        "args": args,
+                        "metadata": metadata,
+                        "status": status_snapshot,
+                        "created_at": created_at,
+                    }
+                )
+
+            if not job_plans:
+                raise HTTPException(status_code=400, detail="No job configurations provided")
+
+            loop = asyncio.get_running_loop()
+
+            def _consume_future(job_label: str, fut: asyncio.Future[Any]) -> None:
+                try:
+                    fut.result()
+                except SystemExit:
+                    LOGGER.info("Job %s exited early", job_label)
+                except Exception:  # pylint: disable=broad-except
+                    LOGGER.exception("Job %s raised an exception during execution", job_label)
+
+            job_ids: list[str] = []
+            for plan in job_plans:
+                job_dir = plan["job_dir"]
+                inputs_dir = plan["inputs_dir"]
+                outputs_dir = plan["outputs_dir"]
+                audio_path = plan["audio_path"]
+
+                job_dir.mkdir(parents=True, exist_ok=True)
+                inputs_dir.mkdir(exist_ok=True)
+                outputs_dir.mkdir(exist_ok=True)
+                shutil.copyfile(temp_audio_path, audio_path)
+
+                _write_json(job_dir / "metadata.json", plan["metadata"])
+                _write_json(job_dir / "status.json", plan["status"])
+
+                future = loop.run_in_executor(
+                    None,
+                    _run_job,
+                    plan["args"],
+                    plan["job_id"],
+                    job_dir,
+                    plan["created_at"],
+                )
+                future.add_done_callback(functools.partial(_consume_future, plan["job_id"]))
+                job_ids.append(plan["job_id"])
+
+            if not job_ids:
+                raise HTTPException(status_code=400, detail="No jobs were scheduled")
+
+            if len(job_ids) == 1:
+                message = quote_plus(f"Started job {job_ids[0]}")
+            else:
+                message = quote_plus("Started jobs " + ", ".join(job_ids))
+
+            return RedirectResponse(url=f"/?message={message}", status_code=303)
+        finally:
+            if temp_audio_path is not None:
+                temp_audio_path.unlink(missing_ok=True)
 
     @app.get("/runs/{job_id}", response_class=HTMLResponse)
     async def show_job(job_id: str) -> str:
