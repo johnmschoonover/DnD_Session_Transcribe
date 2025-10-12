@@ -215,14 +215,16 @@ def test_main_runs_pipeline_with_overrides(cli_module, monkeypatch, tmp_path):
 
     monkeypatch.setattr(cli_module, "splice_segments", fake_splice)
 
-    monkeypatch.setattr(
-        cli_module,
-        "rerun_precise_on_spans",
-        lambda *_, **__: [
+    precise_calls: list[tuple] = []
+
+    def fake_precise(*call_args, **call_kwargs):
+        precise_calls.append((call_args, call_kwargs))
+        return [
             {"start": 0.2, "end": 0.8, "text": "colour"},
             {"start": 1.2, "end": 1.8, "text": "dragon"},
-        ],
-    )
+        ]
+
+    monkeypatch.setattr(cli_module, "rerun_precise_on_spans", fake_precise)
 
     spell_calls: list[tuple[str, list[tuple[str, str]]]] = []
 
@@ -273,13 +275,30 @@ def test_main_runs_pipeline_with_overrides(cli_module, monkeypatch, tmp_path):
     assert run_asr_calls[0]["resume"] is True
     assert run_asr_calls[0]["total_sec"] == 6.0
 
-    assert cli_module.ASR.model == "base.en"
-    assert cli_module.ASR.device == "cpu"
-    assert cli_module.ASR.compute_type == "int8"
-    assert cli_module.DIA.num_speakers == 3
-    assert cli_module.PREC.enabled is True
+    asr_cfg = run_asr_calls[0]["cfg"]
+    assert asr_cfg is not cli_module.ASR
+    assert asr_cfg.model == "base.en"
+    assert asr_cfg.device == "cpu"
+    assert asr_cfg.compute_type == "int8"
+    assert cli_module.ASR.model == "large-v3"
+    assert cli_module.ASR.device == "cuda"
+
+    dia_cfg = diarization_calls[0]["cfg"]
+    assert dia_cfg is not cli_module.DIA
+    assert dia_cfg.num_speakers == 3
+    assert cli_module.DIA.num_speakers == cli_module.DiarizationConfig().num_speakers
+
+    assert precise_calls
+    call_args, _ = precise_calls[0]
+    # (audio_path, spans, lang, model, compute_type, device, beam_size, patience, window_max_s)
+    assert call_args[3] == "large-v3"
+    assert call_args[4] == "float32"
+    assert call_args[5] == "cpu"
+    assert call_args[6] == cli_module.PreciseRerunConfig().beam_size
+
+    assert cli_module.PREC.enabled is False
     assert cli_module.PREC.model == "large-v3"
-    assert cli_module.PREC.compute_type == "float32"
+    assert cli_module.PREC.compute_type == "float16"
 
     assert splice_calls
     assert spell_calls == [
