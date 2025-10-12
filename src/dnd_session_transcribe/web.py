@@ -245,6 +245,7 @@ def _build_job_html(
     log_available: bool,
     preview: dict[str, Any] | None = None,
     preview_url: str | None = None,
+    settings: dict[str, Any] | None = None,
 ) -> str:
     raw_job_id = job.get("job_id", "")
     job_id_text = str(raw_job_id)
@@ -256,7 +257,7 @@ def _build_job_html(
     audio_name = html.escape(job.get("audio_filename", ""))
     delete_action = html.escape(f"/runs/{quote(job_id_text, safe='')}/delete")
 
-    file_rows = []
+    file_rows: list[str] = []
     for label, url in files:
         file_rows.append(
             f"<li><a href=\"{html.escape(url)}\">{html.escape(label)}</a></li>"
@@ -305,6 +306,29 @@ def _build_job_html(
             "</div>"
         )
 
+    settings_block = ""
+    if settings:
+        rows: list[str] = []
+        for key, value in settings.items():
+            if isinstance(value, (dict, list)):
+                formatted = json.dumps(value, indent=2, sort_keys=True)
+                value_html = f"<pre>{html.escape(formatted)}</pre>"
+            else:
+                value_html = html.escape(str(value))
+            rows.append(
+                "<tr>"
+                f"<th scope=\"row\">{html.escape(str(key))}</th>"
+                f"<td>{value_html}</td>"
+                "</tr>"
+            )
+        settings_table = "<table class='settings-table'><tbody>" + "".join(rows) + "</tbody></table>"
+        settings_block = (
+            "<div class='panel'>"
+            "  <h2>Settings</h2>"
+            f"  {settings_table}"
+            "</div>"
+        )
+
     return f"""
 <!DOCTYPE html>
 <html lang=\"en\">
@@ -321,6 +345,10 @@ def _build_job_html(
     .delete-form {{ margin-top: 1.5rem; }}
     .delete-button {{ background: #cf222e; }}
     .delete-button:hover {{ background: #a40e26; }}
+    .settings-table {{ width: 100%; border-collapse: collapse; margin-top: 0.75rem; }}
+    .settings-table th, .settings-table td {{ padding: 0.5rem; border-bottom: 1px solid #d0d7de; vertical-align: top; }}
+    .settings-table th {{ width: 35%; text-align: left; background: #f0f3f6; }}
+    .settings-table pre {{ margin: 0; white-space: pre-wrap; word-break: break-word; }}
   </style>
 </head>
 <body>
@@ -333,6 +361,7 @@ def _build_job_html(
     {error_block}
   </div>
   {preview_block}
+  {settings_block}
   <div class='panel'>
     <h2>Outputs</h2>
     {file_list}
@@ -536,14 +565,6 @@ def create_app(base_dir: Optional[Path] = None) -> FastAPI:
             preview_start_arg = None
             preview_duration_arg = None
 
-        metadata = {
-            "job_id": job_id,
-            "audio_filename": audio_file.filename,
-            "created_at": created_at,
-            "preview": preview_meta,
-        }
-        _write_json(job_dir / "metadata.json", metadata)
-
         parsed_num_speakers: Optional[int]
         try:
             parsed_num_speakers = int(num_speakers) if num_speakers.strip() else None
@@ -557,20 +578,38 @@ def create_app(base_dir: Optional[Path] = None) -> FastAPI:
         if vocal_choice not in {None, "off", "bandpass"}:
             raise HTTPException(status_code=400, detail="Invalid vocal_extract value")
 
+        resume_enabled = _checkbox_to_bool(resume)
+        precise_rerun_enabled = _checkbox_to_bool(precise_rerun)
+
         args = build_cli_args(
             audio_path,
             outdir=outputs_dir,
-            resume=_checkbox_to_bool(resume),
+            resume=resume_enabled,
             num_speakers=parsed_num_speakers,
             asr_model=asr_model or None,
             asr_device=asr_device or None,
             asr_compute_type=asr_compute_type or None,
-            precise_rerun=_checkbox_to_bool(precise_rerun),
+            precise_rerun=precise_rerun_enabled,
             vocal_extract=vocal_choice,
             log_level=log_level,
             preview_start=preview_start_arg,
             preview_duration=preview_duration_arg,
         )
+
+        settings_snapshot = {
+            key: (str(val) if isinstance(val, Path) else val)
+            for key, val in vars(args).items()
+        }
+        settings_snapshot["preview_requested"] = preview_requested
+
+        metadata = {
+            "job_id": job_id,
+            "audio_filename": audio_file.filename,
+            "created_at": created_at,
+            "preview": preview_meta,
+            "settings": settings_snapshot,
+        }
+        _write_json(job_dir / "metadata.json", metadata)
 
         status_snapshot = _job_status_template(job_id, created_at)
         status_snapshot["audio_filename"] = audio_file.filename
@@ -610,6 +649,7 @@ def create_app(base_dir: Optional[Path] = None) -> FastAPI:
             log_available,
             preview=meta.get("preview"),
             preview_url=preview_link,
+            settings=meta.get("settings"),
         )
 
     @app.get("/runs/{job_id}/log")
