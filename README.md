@@ -106,6 +106,10 @@ Key behaviors:
 - Adjust the bind host/port via `DND_TRANSCRIBE_WEB_HOST` and `DND_TRANSCRIBE_WEB_PORT` environment variables if you need different network settings.
 - Each job records its log to `job.log`; the Web UI links to it alongside the output files for quick download.
 - The FastAPI app can also be served manually: `uvicorn dnd_session_transcribe.web:app --host 0.0.0.0 --port 8000`.
+- Uploading an audio file allows you to queue multiple configurations at once. Each configuration gets its own run directory,
+  cloned audio input, and metadata snapshot of the CLI arguments so you can compare outputs.
+- Job detail pages now include a "Settings" panel that mirrors the CLI arguments and preview metadata saved in
+  `metadata.json`, simplifying reruns or incremental tweaks.
 
 ## Outputs
 Each run writes artifacts prefixed by the audio stem inside the resolved output directory:
