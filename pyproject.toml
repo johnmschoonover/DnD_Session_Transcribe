@@ -17,7 +17,10 @@ dependencies = [
   "torch",
   "pandas",
   "soundfile",
-  "tqdm"
+  "tqdm",
+  "fastapi",
+  "uvicorn[standard]",
+  "python-multipart"
 ]
 classifiers = [
   "Programming Language :: Python :: 3",
@@ -33,6 +36,7 @@ Documentation = "https://github.com/dnd-session-transcribe/dnd-session-transcrib
 
 [project.scripts]
 dnd-transcribe = "dnd_session_transcribe.cli:main"
+dnd-transcribe-web = "dnd_session_transcribe.web:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
