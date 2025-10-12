@@ -49,6 +49,7 @@ import torch
 
 # ========================= CLI =========================
 import argparse
+import contextlib
 import shutil
 
 
@@ -157,210 +158,253 @@ PROF = ProfilesConfig()   # reserved for profile matching
 
 
 # ======================= MAIN =======================
+def _apply_custom_logging(log_level: str | None, handlers: list[logging.Handler]) -> contextlib.AbstractContextManager[None]:
+    """Attach custom log handlers for the duration of a run."""
+
+    @contextlib.contextmanager
+    def _manager():
+        root_logger = logging.getLogger()
+        previous_level = root_logger.level
+        level = LOG_LEVELS.get(log_level, logging.WARNING)
+        root_logger.setLevel(level)
+        for handler in handlers:
+            root_logger.addHandler(handler)
+        try:
+            yield
+        finally:
+            for handler in handlers:
+                root_logger.removeHandler(handler)
+                handler.flush()
+                handler.close()
+            root_logger.setLevel(previous_level)
+
+    return _manager()
+
+
+def run_transcription(
+    args: argparse.Namespace,
+    *,
+    configure_logging: bool = True,
+    log_handlers: list[logging.Handler] | None = None,
+) -> pathlib.Path:
+    """Execute the transcription pipeline using CLI-style arguments."""
+
+    handlers = list(log_handlers or [])
+
+    log_context: contextlib.AbstractContextManager[None]
+    if configure_logging:
+        logging.basicConfig(
+            level=LOG_LEVELS.get(getattr(args, "log_level", LOG.level), logging.WARNING),
+            format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+            force=True,
+        )
+        log_context = contextlib.nullcontext()
+    else:
+        log_context = _apply_custom_logging(getattr(args, "log_level", LOG.level), handlers)
+
+    with log_context:
+        logger.debug("Logging initialized at %s", getattr(args, "log_level", LOG.level))
+
+        audio = pathlib.Path(args.audio).resolve()
+        logger.debug("Resolved audio path: %s", audio)
+        if not audio.exists():
+            raise SystemExit(f"Audio not found: {audio}")
+
+        original_audio = audio
+
+        preview_requested = (
+            args.preview_start is not None
+            or args.preview_duration is not None
+            or args.preview_output is not None
+        )
+
+        outdir: pathlib.Path | None = None
+
+        # Preview rendering short-circuit
+        if preview_requested:
+            if args.outdir:
+                requested_outdir = pathlib.Path(args.outdir).expanduser().resolve()
+                if requested_outdir.name.startswith("preview_"):
+                    outdir = requested_outdir
+                else:
+                    outdir = requested_outdir.parent / f"preview_{requested_outdir.name}"
+            else:
+                outdir = next_outdir_for(str(original_audio), f"preview_{WR.out_prefix}")
+
+            outdir.mkdir(parents=True, exist_ok=True)
+
+            start_sec = parse_time_spec(args.preview_start) if args.preview_start is not None else 0.0
+            duration_sec = (
+                parse_time_spec(args.preview_duration)
+                if args.preview_duration is not None
+                else 10.0
+            )
+
+            preview_primary = outdir / f"{original_audio.stem}_preview.wav"
+            destinations: list[pathlib.Path] = []
+
+            if args.preview_output is not None:
+                user_path = pathlib.Path(args.preview_output).expanduser().resolve()
+                user_path.parent.mkdir(parents=True, exist_ok=True)
+                destinations.append(user_path)
+
+            destinations.append(preview_primary)
+
+            logger.info(
+                "Rendering preview from %.2fs for %.2fs", start_sec, duration_sec
+            )
+
+            with render_preview(audio, start=start_sec, duration=duration_sec) as snippet:
+                seen: set[pathlib.Path] = set()
+                for dest in destinations:
+                    if dest in seen:
+                        continue
+                    shutil.copyfile(snippet.path, dest)
+                    logger.info(
+                        "Preview snippet ready: %s (%.2fs)",
+                        dest,
+                        snippet.duration,
+                    )
+                    seen.add(dest)
+
+            audio = preview_primary
+            logger.info(
+                "Continuing with transcription for preview snippet from %s", original_audio
+            )
+
+        # CLI → config overrides
+        if args.vocal_extract is not None:
+            PRE.vocal_extract = args.vocal_extract
+        if args.hotwords_file:
+            ASR.hotwords_file = args.hotwords_file
+        if args.initial_prompt_file:
+            ASR.initial_prompt_file = args.initial_prompt_file
+        if args.asr_model:
+            ASR.model = args.asr_model
+        if args.asr_device:
+            ASR.device = args.asr_device
+        if args.asr_compute_type:
+            ASR.compute_type = args.asr_compute_type
+        if args.num_speakers:
+            DIA.num_speakers = args.num_speakers
+        if args.precise_rerun:
+            PREC.enabled = True
+        if args.precise_model:
+            PREC.model = args.precise_model
+        if args.precise_device:
+            PREC.device = args.precise_device
+        if args.precise_compute_type:
+            PREC.compute_type = args.precise_compute_type
+
+        # outdir (auto textN if not provided)
+        if outdir is None:
+            outdir = (
+                pathlib.Path(args.outdir).expanduser().resolve()
+                if args.outdir
+                else next_outdir_for(str(audio), WR.out_prefix)
+            )
+            outdir.mkdir(parents=True, exist_ok=True)
+        base = outdir / audio.stem
+        logger.debug("Output directory resolved: %s", outdir)
+        logger.debug("Output base path: %s", base)
+
+        logger.info("Audio path: %s", audio)
+        logger.info("Output directory: %s", outdir)
+
+        # RAM copy (optional)
+        src_for_io = copy_to_ram_if_requested(str(audio), args.ram)
+        logger.debug("Source for I/O: %s", src_for_io)
+
+        # preprocess (utilities)
+        mode = args.vocal_extract if args.vocal_extract is not None else PRE.vocal_extract
+        VOCAL_AUDIO = preprocess_audio(src_for_io, mode)
+        if VOCAL_AUDIO != str(audio):
+            logger.info("Preprocessed audio via %s → %s", mode, VOCAL_AUDIO)
+        else:
+            logger.debug("Preprocessing skipped; using original audio")
+
+        # hotwords / prompt / spelling
+        hotwords = load_hotwords(ASR.hotwords_file)
+        if hotwords:
+            logger.debug("Loaded hotwords (%d chars)", len(hotwords))
+        init_prompt = load_initial_prompt(ASR.initial_prompt_file)
+        if init_prompt:
+            logger.debug("Loaded initial prompt (%d chars)", len(init_prompt))
+        sp_rules = load_spelling_map(args.spelling_map)
+        if sp_rules:
+            logger.debug("Loaded %d spelling correction rules", len(sp_rules))
+
+        # duration (MUST be the file passed to ASR for proper %)
+        total_sec = read_duration_seconds(VOCAL_AUDIO)
+        logger.debug("Total audio duration (s): %.2f", total_sec)
+
+        # ---------------- ASR ----------------
+        fw_segments = run_asr(VOCAL_AUDIO, base, ASR, hotwords, init_prompt, resume=args.resume, total_sec=total_sec)
+        fw_segments = scrub_segments(fw_segments, SCR)
+        fw_segments = [s for s in fw_segments if s["end"] > s["start"]]
+        atomic_json(f"{base}_fw_segments_scrubbed.json", {"segments": fw_segments})
+        logger.debug("Scrubbed segments retained: %d", len(fw_segments))
+
+        # ------------- precise re-run (optional) -------------
+        if PREC.enabled:
+            spans = find_hard_spans(
+                fw_segments, dur=total_sec,
+                logprob_thr=PREC.thr_logprob, cr_thr=PREC.thr_compratio,
+                nospeech_thr=PREC.thr_nospeech, pad=PREC.pad_s, merge_gap=PREC.merge_gap_s
+            )
+            logger.debug("Hard span candidates: %s", spans)
+            if spans:
+                total = sum(e - s for s, e in spans)
+                logger.info(
+                    "Precise rerun on %d span(s) (~%.1fs) using %s beam=%s patience=%s",
+                    len(spans), total, PREC.model, PREC.beam_size, PREC.patience,
+                )
+                repl = rerun_precise_on_spans(
+                    VOCAL_AUDIO, spans, "en", PREC.model, PREC.compute_type,
+                    PREC.device, PREC.beam_size, PREC.patience, PREC.window_max_s
+                )
+                fw_segments = splice_segments(fw_segments, repl)
+                fw_segments = scrub_segments(fw_segments, SCR)
+                fw_segments = [s for s in fw_segments if s["end"] > s["start"]]
+                atomic_json(f"{base}_fw_segments_after_precise.json", {"segments": fw_segments})
+                logger.debug("Segments after precise rerun: %d", len(fw_segments))
+            else:
+                logger.info("Precise rerun skipped; no hard spans detected")
+
+        # post-correct (optional)
+        if sp_rules:
+            for s in fw_segments:
+                s["text"] = apply_spelling_rules(s.get("text","") or "", sp_rules)
+            atomic_json(f"{base}_fw_segments_postspell.json", {"segments": fw_segments})
+            logger.info("Applied spelling map (%d rules)", len(sp_rules))
+
+        # ---------------- alignment ----------------
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+
+        fw_segments = clamp_to_duration(fw_segments, total_sec)
+        aligned = run_alignment(fw_segments, VOCAL_AUDIO, ASR.device, base, resume=args.resume)
+
+        # ---------------- diarization ----------------
+        token = ensure_hf_token()
+        dia_df = run_diarization(VOCAL_AUDIO, ASR.device, DIA, token, total_sec, base, resume=args.resume)
+        if dia_df.empty:
+            raise SystemExit("[diarize] no speaker regions produced")
+
+        # ---------------- assign speakers ----------------
+        logger.info("Assigning speakers to words…")
+        final = whisperx.assign_word_speakers(dia_df, aligned)
+
+        # ---------------- write outputs ----------------
+        write_srt_vtt_txt_json(final, base)
+        logger.info("Processing complete → %s", outdir)
+
+        return outdir
+
+
 def main():
     args = parse_args()
-
-    logging.basicConfig(
-        level=LOG_LEVELS.get(args.log_level, logging.WARNING),
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-        force=True,
-    )
-    logger.debug("Logging initialized at %s", args.log_level)
-
-    audio = pathlib.Path(args.audio).resolve()
-    logger.debug("Resolved audio path: %s", audio)
-    if not audio.exists():
-        raise SystemExit(f"Audio not found: {audio}")
-
-    original_audio = audio
-
-    preview_requested = (
-        args.preview_start is not None
-        or args.preview_duration is not None
-        or args.preview_output is not None
-    )
-
-    outdir: pathlib.Path | None = None
-
-    # Preview rendering short-circuit
-    if preview_requested:
-        if args.outdir:
-            requested_outdir = pathlib.Path(args.outdir).expanduser().resolve()
-            if requested_outdir.name.startswith("preview_"):
-                outdir = requested_outdir
-            else:
-                outdir = requested_outdir.parent / f"preview_{requested_outdir.name}"
-        else:
-            outdir = next_outdir_for(str(original_audio), f"preview_{WR.out_prefix}")
-
-        outdir.mkdir(parents=True, exist_ok=True)
-
-        start_sec = parse_time_spec(args.preview_start) if args.preview_start is not None else 0.0
-        duration_sec = (
-            parse_time_spec(args.preview_duration)
-            if args.preview_duration is not None
-            else 10.0
-        )
-
-        preview_primary = outdir / f"{original_audio.stem}_preview.wav"
-        destinations: list[pathlib.Path] = []
-
-        if args.preview_output is not None:
-            user_path = pathlib.Path(args.preview_output).expanduser().resolve()
-            user_path.parent.mkdir(parents=True, exist_ok=True)
-            destinations.append(user_path)
-
-        destinations.append(preview_primary)
-
-        logger.info(
-            "Rendering preview from %.2fs for %.2fs", start_sec, duration_sec
-        )
-
-        with render_preview(audio, start=start_sec, duration=duration_sec) as snippet:
-            seen: set[pathlib.Path] = set()
-            for dest in destinations:
-                if dest in seen:
-                    continue
-                shutil.copyfile(snippet.path, dest)
-                logger.info(
-                    "Preview snippet ready: %s (%.2fs)",
-                    dest,
-                    snippet.duration,
-                )
-                seen.add(dest)
-
-        audio = preview_primary
-        logger.info(
-            "Continuing with transcription for preview snippet from %s", original_audio
-        )
-
-    # CLI → config overrides
-    if args.vocal_extract is not None:
-        PRE.vocal_extract = args.vocal_extract
-    if args.hotwords_file:
-        ASR.hotwords_file = args.hotwords_file
-    if args.initial_prompt_file:
-        ASR.initial_prompt_file = args.initial_prompt_file
-    if args.asr_model:
-        ASR.model = args.asr_model
-    if args.asr_device:
-        ASR.device = args.asr_device
-    if args.asr_compute_type:
-        ASR.compute_type = args.asr_compute_type
-    if args.num_speakers:
-        DIA.num_speakers = args.num_speakers
-    if args.precise_rerun:
-        PREC.enabled = True
-    if args.precise_model:
-        PREC.model = args.precise_model
-    if args.precise_device:
-        PREC.device = args.precise_device
-    if args.precise_compute_type:
-        PREC.compute_type = args.precise_compute_type
-
-    # outdir (auto textN if not provided)
-    if outdir is None:
-        outdir = (
-            pathlib.Path(args.outdir).expanduser().resolve()
-            if args.outdir
-            else next_outdir_for(str(audio), WR.out_prefix)
-        )
-        outdir.mkdir(parents=True, exist_ok=True)
-    base = outdir / audio.stem
-    logger.debug("Output directory resolved: %s", outdir)
-    logger.debug("Output base path: %s", base)
-
-    logger.info("Audio path: %s", audio)
-    logger.info("Output directory: %s", outdir)
-
-    # RAM copy (optional)
-    src_for_io = copy_to_ram_if_requested(str(audio), args.ram)
-    logger.debug("Source for I/O: %s", src_for_io)
-
-    # preprocess (utilities)
-    mode = args.vocal_extract if args.vocal_extract is not None else PRE.vocal_extract
-    VOCAL_AUDIO = preprocess_audio(src_for_io, mode)
-    if VOCAL_AUDIO != str(audio):
-        logger.info("Preprocessed audio via %s → %s", mode, VOCAL_AUDIO)
-    else:
-        logger.debug("Preprocessing skipped; using original audio")
-
-    # hotwords / prompt / spelling
-    hotwords = load_hotwords(ASR.hotwords_file)
-    if hotwords:
-        logger.debug("Loaded hotwords (%d chars)", len(hotwords))
-    init_prompt = load_initial_prompt(ASR.initial_prompt_file)
-    if init_prompt:
-        logger.debug("Loaded initial prompt (%d chars)", len(init_prompt))
-    sp_rules = load_spelling_map(args.spelling_map)
-    if sp_rules:
-        logger.debug("Loaded %d spelling correction rules", len(sp_rules))
-
-    # duration (MUST be the file passed to ASR for proper %)
-    total_sec = read_duration_seconds(VOCAL_AUDIO)
-    logger.debug("Total audio duration (s): %.2f", total_sec)
-
-    # ---------------- ASR ----------------
-    fw_segments = run_asr(VOCAL_AUDIO, base, ASR, hotwords, init_prompt, resume=args.resume, total_sec=total_sec)
-    fw_segments = scrub_segments(fw_segments, SCR)
-    fw_segments = [s for s in fw_segments if s["end"] > s["start"]]
-    atomic_json(f"{base}_fw_segments_scrubbed.json", {"segments": fw_segments})
-    logger.debug("Scrubbed segments retained: %d", len(fw_segments))
-
-    # ------------- precise re-run (optional) -------------
-    if PREC.enabled:
-        spans = find_hard_spans(
-            fw_segments, dur=total_sec,
-            logprob_thr=PREC.thr_logprob, cr_thr=PREC.thr_compratio,
-            nospeech_thr=PREC.thr_nospeech, pad=PREC.pad_s, merge_gap=PREC.merge_gap_s
-        )
-        logger.debug("Hard span candidates: %s", spans)
-        if spans:
-            total = sum(e - s for s, e in spans)
-            logger.info(
-                "Precise rerun on %d span(s) (~%.1fs) using %s beam=%s patience=%s",
-                len(spans), total, PREC.model, PREC.beam_size, PREC.patience,
-            )
-            repl = rerun_precise_on_spans(
-                VOCAL_AUDIO, spans, "en", PREC.model, PREC.compute_type,
-                PREC.device, PREC.beam_size, PREC.patience, PREC.window_max_s
-            )
-            fw_segments = splice_segments(fw_segments, repl)
-            fw_segments = scrub_segments(fw_segments, SCR)
-            fw_segments = [s for s in fw_segments if s["end"] > s["start"]]
-            atomic_json(f"{base}_fw_segments_after_precise.json", {"segments": fw_segments})
-            logger.debug("Segments after precise rerun: %d", len(fw_segments))
-        else:
-            logger.info("Precise rerun skipped; no hard spans detected")
-
-    # post-correct (optional)
-    if sp_rules:
-        for s in fw_segments:
-            s["text"] = apply_spelling_rules(s.get("text","") or "", sp_rules)
-        atomic_json(f"{base}_fw_segments_postspell.json", {"segments": fw_segments})
-        logger.info("Applied spelling map (%d rules)", len(sp_rules))
-
-    # ---------------- alignment ----------------
-    torch.backends.cuda.matmul.allow_tf32 = True
-    torch.backends.cudnn.allow_tf32 = True
-
-    fw_segments = clamp_to_duration(fw_segments, total_sec)
-    aligned = run_alignment(fw_segments, VOCAL_AUDIO, ASR.device, base, resume=args.resume)
-
-    # ---------------- diarization ----------------
-    token = ensure_hf_token()
-    dia_df = run_diarization(VOCAL_AUDIO, ASR.device, DIA, token, total_sec, base, resume=args.resume)
-    if dia_df.empty:
-        raise SystemExit("[diarize] no speaker regions produced")
-
-    # ---------------- assign speakers ----------------
-    logger.info("Assigning speakers to words…")
-    final = whisperx.assign_word_speakers(dia_df, aligned)
-
-    # ---------------- write outputs ----------------
-    write_srt_vtt_txt_json(final, base)
-    logger.info("Processing complete → %s", outdir)
-
+    run_transcription(args)
 
 if __name__ == "__main__":
     # Encourage unbuffered output so bars animate in more shells

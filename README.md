@@ -90,6 +90,23 @@ When enabling `--precise-rerun` on CPU, pair it with `--precise-model tiny --pre
 
 The script automatically chooses an output directory (`textN` alongside the audio) unless `--outdir` is supplied. Preview runs instead create `preview_textN` next to the source audio (or `preview_<custom>` if you provide `--outdir`).
 
+## Web UI
+
+Prefer a browser-based workflow? Install the package (which now includes FastAPI and Uvicorn) and launch the hosted interface:
+
+```bash
+dnd-transcribe-web  # binds to 0.0.0.0:8000 by default
+```
+
+The server exposes a simple dashboard where you can upload audio, toggle resume/precise rerun, monitor job status, and download the generated transcripts/logs. Because it binds to `0.0.0.0`, you can access it from other machines on your network via `http://<server-ip>:8000`.
+
+Key behaviors:
+
+- Jobs are stored beneath `webui_runs/` in the current working directory. Override the storage root with `DND_TRANSCRIBE_WEB_ROOT=/path/to/runs`.
+- Adjust the bind host/port via `DND_TRANSCRIBE_WEB_HOST` and `DND_TRANSCRIBE_WEB_PORT` environment variables if you need different network settings.
+- Each job records its log to `job.log`; the Web UI links to it alongside the output files for quick download.
+- The FastAPI app can also be served manually: `uvicorn dnd_session_transcribe.web:app --host 0.0.0.0 --port 8000`.
+
 ## Outputs
 Each run writes artifacts prefixed by the audio stem inside the resolved output directory:
 - `<name>.srt` – Subtitle file with speaker tags and timestamps for video players.
