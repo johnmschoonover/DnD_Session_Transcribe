@@ -46,8 +46,12 @@ def build_cli_args(
     audio: Path,
     *,
     outdir: Path,
+    ram: bool = False,
     resume: bool = False,
     num_speakers: Optional[int] = None,
+    hotwords_file: Optional[Path | str] = None,
+    initial_prompt_file: Optional[Path | str] = None,
+    spelling_map: Optional[Path | str] = None,
     asr_model: Optional[str] = None,
     asr_device: Optional[str] = None,
     asr_compute_type: Optional[str] = None,
@@ -66,12 +70,13 @@ def build_cli_args(
     return argparse.Namespace(
         audio=str(audio),
         outdir=str(outdir),
-        ram=False,
+        ram=ram,
         resume=resume,
         num_speakers=num_speakers,
-        hotwords_file=None,
-        initial_prompt_file=None,
-        spelling_map=None,
+        hotwords_file=str(hotwords_file) if hotwords_file is not None else None,
+        initial_prompt_file=
+        str(initial_prompt_file) if initial_prompt_file is not None else None,
+        spelling_map=str(spelling_map) if spelling_map is not None else None,
         precise_rerun=precise_rerun,
         asr_model=asr_model,
         asr_device=asr_device,
@@ -124,6 +129,35 @@ def _generate_job_id(prefix: str = "job") -> str:
     return f"{prefix}-{datetime.utcnow():%Y%m%d-%H%M%S}-{token}"
 
 
+_ASR_MODEL_SUGGESTIONS = [
+    "tiny",
+    "tiny.en",
+    "base",
+    "base.en",
+    "small",
+    "small.en",
+    "medium",
+    "medium.en",
+    "large-v2",
+    "large-v3",
+    "turbo",
+    "distil-large-v2",
+    "distil-large-v3",
+    "distil-medium.en",
+    "distil-small.en",
+]
+
+_COMPUTE_TYPE_SUGGESTIONS = [
+    "auto",
+    "float16",
+    "float32",
+    "int8",
+    "int8_float16",
+    "int8_float32",
+    "int8_float16_float32",
+]
+
+
 def _checkbox_to_bool(value: Optional[str]) -> bool:
     if value is None:
         return False
@@ -135,12 +169,48 @@ def _job_config_block(index: str, *, removable: bool) -> str:
 
     prefix = f"job-{index}-"
     log_level_options = "".join(
-        f"<option value='{level}'{' selected' if level == cli.LOG.level else ''}>{level}</option>"
+        (
+            "<option value='{level}'{selected}>{label}</option>".format(
+                level=html.escape(level),
+                label=html.escape(level.title()),
+                selected=" selected" if level == cli.LOG.level else "",
+            )
+        )
         for level in cli.LOG_LEVELS
     )
 
+    device_options = "".join(
+        (
+            "<option value='{value}'{selected}>{label}</option>".format(
+                value=html.escape(value),
+                label=html.escape(label),
+                selected=" selected" if value == "" else "",
+            )
+        )
+        for value, label in (
+            ("", "Config default"),
+            ("cpu", "cpu"),
+            ("cuda", "cuda"),
+            ("mps", "mps"),
+        )
+    )
+
+    vocal_options = "".join(
+        (
+            "<option value='{value}'>{label}</option>".format(
+                value=html.escape(value),
+                label=html.escape(label),
+            )
+        )
+        for value, label in (
+            ("", "Config default"),
+            ("off", "Off"),
+            ("bandpass", "Band-pass filter"),
+        )
+    )
+
     remove_button = (
-        "<button type=\"button\" class=\"remove-job secondary-button\">Remove</button>"
+        "<button type=\"button\" class=\"remove-job neon-button secondary\">Remove</button>"
         if removable
         else ""
     )
@@ -150,41 +220,63 @@ def _job_config_block(index: str, *, removable: bool) -> str:
         + html.escape(index)
         + "\">"
         + "<div class=\"job-config-header\">"
-        + "<h3>Configuration <span class=\"job-number\"></span></h3>"
+        + "<h3><span class=\"job-number\"></span> Loadout</h3>"
         + remove_button
         + "</div>"
+        + "<div class=\"config-grid\">"
+        + "<section class=\"config-card\">"
+        + "<h4>Control Center</h4>"
         + f"<label for=\"{prefix}log_level\">Log level</label>"
         + f"<select id=\"{prefix}log_level\" name=\"{prefix}log_level\">{log_level_options}</select>"
-        + f"<label for=\"{prefix}asr_model\">Faster-Whisper model override (optional)</label>"
-        + f"<input id=\"{prefix}asr_model\" name=\"{prefix}asr_model\" type=\"text\" placeholder=\"e.g. tiny, base, large-v3\" />"
-        + f"<label for=\"{prefix}num_speakers\">Number of speakers (optional)</label>"
-        + f"<input id=\"{prefix}num_speakers\" name=\"{prefix}num_speakers\" type=\"text\" inputmode=\"numeric\" placeholder=\"e.g. 4\" />"
-        + f"<label for=\"{prefix}asr_device\">ASR device override</label>"
-        + f"<select id=\"{prefix}asr_device\" name=\"{prefix}asr_device\">"
-        + "<option value=\"\">(default)</option>"
-        + "<option value=\"cpu\">cpu</option>"
-        + "<option value=\"cuda\">cuda</option>"
-        + "<option value=\"mps\">mps</option>"
-        + "</select>"
-        + f"<label for=\"{prefix}asr_compute_type\">ASR compute type override</label>"
-        + f"<input id=\"{prefix}asr_compute_type\" name=\"{prefix}asr_compute_type\" type=\"text\" placeholder=\"e.g. float16\" />"
-        + f"<label for=\"{prefix}vocal_extract\">Preprocessing</label>"
-        + f"<select id=\"{prefix}vocal_extract\" name=\"{prefix}vocal_extract\">"
-        + "<option value=\"\">(default)</option>"
-        + "<option value=\"off\">off</option>"
-        + "<option value=\"bandpass\">bandpass</option>"
-        + "</select>"
-        + "<div class=\"preview-box\">"
-        + f"<label><input type=\"checkbox\" id=\"{prefix}preview_enabled\" name=\"{prefix}preview_enabled\" value=\"true\" /> Render preview snippet</label>"
-        + f"<label for=\"{prefix}preview_start\">Preview start (seconds or MM:SS)</label>"
-        + f"<input id=\"{prefix}preview_start\" name=\"{prefix}preview_start\" type=\"text\" placeholder=\"e.g. 1:30\" />"
-        + f"<label for=\"{prefix}preview_duration\">Preview duration (seconds)</label>"
-        + f"<input id=\"{prefix}preview_duration\" name=\"{prefix}preview_duration\" type=\"text\" placeholder=\"default: 10\" />"
-        + "<div class=\"help-text\">When enabled, the snippet audio and transcripts will be generated alongside the full outputs.</div>"
+        + f"<label for=\"{prefix}num_speakers\">Number of speakers</label>"
+        + f"<input id=\"{prefix}num_speakers\" name=\"{prefix}num_speakers\" type=\"number\" min=\"1\" placeholder=\"auto\" />"
+        + "<div class=\"checkbox-grid\">"
+        + f"<label><input type=\"checkbox\" name=\"{prefix}ram\" value=\"true\" checked /> Stage audio in RAM</label>"
+        + f"<label><input type=\"checkbox\" name=\"{prefix}resume\" value=\"true\" checked /> Resume from checkpoints</label>"
+        + f"<label><input type=\"checkbox\" name=\"{prefix}precise_rerun\" value=\"true\" checked /> Precise re-run</label>"
         + "</div>"
-        + "<div class=\"job-checkboxes\">"
-        + f"<label><input type=\"checkbox\" name=\"{prefix}resume\" value=\"true\" /> Resume from cached checkpoints</label>"
-        + f"<label><input type=\"checkbox\" name=\"{prefix}precise_rerun\" value=\"true\" /> Enable precise re-run</label>"
+        + "</section>"
+        + "<section class=\"config-card\">"
+        + "<h4>ASR Engine</h4>"
+        + f"<label for=\"{prefix}asr_model\">Faster-Whisper model</label>"
+        + f"<input id=\"{prefix}asr_model\" name=\"{prefix}asr_model\" type=\"text\" list=\"asr-models\" placeholder=\"config default\" />"
+        + f"<label for=\"{prefix}asr_device\">Device override</label>"
+        + f"<select id=\"{prefix}asr_device\" name=\"{prefix}asr_device\">{device_options}</select>"
+        + f"<label for=\"{prefix}asr_compute_type\">Compute type</label>"
+        + f"<input id=\"{prefix}asr_compute_type\" name=\"{prefix}asr_compute_type\" type=\"text\" list=\"compute-types\" placeholder=\"auto\" />"
+        + "</section>"
+        + "<section class=\"config-card\">"
+        + "<h4>Prompt Engineering</h4>"
+        + f"<label for=\"{prefix}hotwords\">Hotwords</label>"
+        + f"<textarea id=\"{prefix}hotwords\" name=\"{prefix}hotwords\" rows=\"3\" placeholder=\"One keyword per line\"></textarea>"
+        + f"<label for=\"{prefix}initial_prompt\">Initial prompt</label>"
+        + f"<textarea id=\"{prefix}initial_prompt\" name=\"{prefix}initial_prompt\" rows=\"3\" placeholder=\"Drop in scene context\"></textarea>"
+        + f"<label for=\"{prefix}spelling_map\">Spelling corrections (CSV)</label>"
+        + f"<textarea id=\"{prefix}spelling_map\" name=\"{prefix}spelling_map\" rows=\"3\" placeholder=\"wrong,right\nStrahd,Strahd von Zarovich\"></textarea>"
+        + "</section>"
+        + "<section class=\"config-card\">"
+        + "<h4>Enhancements</h4>"
+        + f"<label for=\"{prefix}vocal_extract\">Preprocessing</label>"
+        + f"<select id=\"{prefix}vocal_extract\" name=\"{prefix}vocal_extract\">{vocal_options}</select>"
+        + f"<label for=\"{prefix}precise_model\">Precise model</label>"
+        + f"<input id=\"{prefix}precise_model\" name=\"{prefix}precise_model\" type=\"text\" list=\"asr-models\" placeholder=\"auto\" />"
+        + f"<label for=\"{prefix}precise_device\">Precise device</label>"
+        + f"<select id=\"{prefix}precise_device\" name=\"{prefix}precise_device\">{device_options}</select>"
+        + f"<label for=\"{prefix}precise_compute_type\">Precise compute</label>"
+        + f"<input id=\"{prefix}precise_compute_type\" name=\"{prefix}precise_compute_type\" type=\"text\" list=\"compute-types\" placeholder=\"auto\" />"
+        + "</section>"
+        + "<section class=\"config-card wide\">"
+        + "<h4>Preview Builder</h4>"
+        + f"<label class=\"checkbox-inline\"><input type=\"checkbox\" id=\"{prefix}preview_enabled\" name=\"{prefix}preview_enabled\" value=\"true\" checked /> Generate 10s teaser</label>"
+        + "<div class=\"preview-grid\">"
+        + f"<label for=\"{prefix}preview_start\">Start</label>"
+        + f"<input id=\"{prefix}preview_start\" name=\"{prefix}preview_start\" type=\"text\" placeholder=\"0 or MM:SS\" />"
+        + f"<label for=\"{prefix}preview_duration\">Duration</label>"
+        + f"<input id=\"{prefix}preview_duration\" name=\"{prefix}preview_duration\" type=\"text\" placeholder=\"10\" />"
+        + f"<label for=\"{prefix}preview_output\">Custom WAV name</label>"
+        + f"<input id=\"{prefix}preview_output\" name=\"{prefix}preview_output\" type=\"text\" placeholder=\"leave blank for default\" />"
+        + "</div>"
+        + "</section>"
         + "</div>"
         + "</div>"
     )
@@ -218,6 +310,15 @@ def _build_home_html(jobs: Iterable[dict[str, Any]], message: str | None = None)
     initial_job_block = _job_config_block("0", removable=False)
     template_job_block = _job_config_block("__INDEX__", removable=True)
 
+    asr_model_datalist = "".join(
+        f"<option value=\"{html.escape(model)}\"></option>"
+        for model in _ASR_MODEL_SUGGESTIONS
+    )
+    compute_type_datalist = "".join(
+        f"<option value=\"{html.escape(value)}\"></option>"
+        for value in _COMPUTE_TYPE_SUGGESTIONS
+    )
+
     return f"""
 <!DOCTYPE html>
 <html lang=\"en\">
@@ -225,34 +326,302 @@ def _build_home_html(jobs: Iterable[dict[str, Any]], message: str | None = None)
   <meta charset=\"utf-8\" />
   <title>DnD Session Transcribe Web UI</title>
   <style>
-    body {{ font-family: Arial, sans-serif; margin: 2rem; background: #f6f8fa; color: #24292f; }}
-    h1 {{ margin-bottom: 1rem; }}
-    form {{ background: #fff; padding: 1.5rem; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 2rem; }}
-    fieldset {{ border: none; padding: 0; margin: 0; }}
-    label {{ display: block; margin-top: 0.75rem; font-weight: 600; }}
-    input[type='text'], select {{ width: 100%; padding: 0.5rem; border: 1px solid #d0d7de; border-radius: 6px; }}
-    input[type='file'] {{ margin-top: 0.5rem; }}
-    button {{ margin-top: 1.5rem; background: #2da44e; border: none; color: #fff; padding: 0.75rem 1.5rem; border-radius: 6px; cursor: pointer; font-size: 1rem; }}
-    button:hover {{ background: #2c974b; }}
-    table {{ width: 100%; border-collapse: collapse; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }}
-    th, td {{ padding: 0.75rem; border-bottom: 1px solid #d0d7de; text-align: left; }}
-    th {{ background: #f0f3f6; }}
-    .message {{ margin-bottom: 1rem; padding: 0.75rem; background: #fff3cd; border: 1px solid #ffe69c; border-radius: 6px; }}
-    .preview-box {{ margin-top: 1rem; padding: 1rem; background: #f6f8fa; border: 1px solid #d0d7de; border-radius: 6px; }}
-    .preview-box label {{ margin-top: 0.5rem; font-weight: 500; }}
-    .help-text {{ font-size: 0.85rem; color: #57606a; margin-top: 0.25rem; }}
-    .inline-form {{ display: inline; }}
-    .delete-button {{ background: #cf222e; margin-top: 0; }}
-    .delete-button:hover {{ background: #a40e26; }}
-    .job-configs {{ margin-top: 1.5rem; }}
-    .job-config {{ margin-top: 1rem; padding: 1rem; background: #fff; border: 1px solid #d0d7de; border-radius: 6px; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }}
-    .job-config + .job-config {{ margin-top: 1rem; }}
-    .job-config-header {{ display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.75rem; }}
-    .job-config h3 {{ margin: 0; font-size: 1.05rem; }}
-    .job-checkboxes label {{ font-weight: 500; margin-top: 0.5rem; }}
-    .secondary-button {{ background: #57606a; margin-top: 0; }}
-    .secondary-button:hover {{ background: #444c56; }}
-    .job-controls {{ margin-top: 0.75rem; }}
+    :root {{
+      color-scheme: dark;
+      --bg: #020305;
+      --panel: rgba(8, 18, 26, 0.82);
+      --border: rgba(57, 255, 20, 0.35);
+      --text: #d7ffda;
+      --muted: rgba(141, 214, 145, 0.8);
+      --accent: #39ff14;
+      --accent-soft: rgba(57, 255, 20, 0.15);
+      --danger: #ff3c7f;
+      font-family: 'Fira Code', 'JetBrains Mono', Menlo, Consolas, monospace;
+    }}
+
+    body {{
+      margin: 0;
+      padding: 3rem;
+      background: radial-gradient(circle at top left, rgba(57,255,20,0.08), transparent 45%),
+                  radial-gradient(circle at bottom right, rgba(0,180,255,0.08), transparent 40%),
+                  var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+    }}
+
+    h1 {{
+      font-size: 2.75rem;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      margin-bottom: 2rem;
+      text-shadow: 0 0 18px rgba(57,255,20,0.7), 0 0 32px rgba(0, 255, 255, 0.35);
+    }}
+
+    h2 {{
+      margin-top: 3rem;
+      text-transform: uppercase;
+      letter-spacing: 0.18em;
+      font-size: 1.1rem;
+      color: var(--muted);
+    }}
+
+    form {{
+      background: var(--panel);
+      border: 1px solid var(--border);
+      box-shadow: 0 0 25px rgba(57,255,20,0.08);
+      border-radius: 18px;
+      padding: 2rem;
+      backdrop-filter: blur(12px);
+    }}
+
+    fieldset {{
+      border: none;
+      padding: 0;
+      margin: 0;
+    }}
+
+    label {{
+      display: block;
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.18em;
+      color: var(--muted);
+      margin-bottom: 0.35rem;
+    }}
+
+    input[type='text'],
+    input[type='number'],
+    input[type='file'],
+    select,
+    textarea {{
+      width: 100%;
+      background: rgba(2, 4, 6, 0.65);
+      border: 1px solid rgba(57,255,20,0.35);
+      border-radius: 10px;
+      padding: 0.65rem 0.75rem;
+      color: var(--text);
+      font-family: inherit;
+      box-shadow: inset 0 0 8px rgba(57,255,20,0.12);
+    }}
+
+    input[type='file'] {{
+      padding: 0.45rem 0.75rem;
+      cursor: pointer;
+      border-style: dashed;
+    }}
+
+    textarea {{
+      min-height: 5rem;
+      resize: vertical;
+    }}
+
+    .help-text {{
+      margin: 0 0 1.75rem;
+      color: var(--muted);
+      font-size: 0.85rem;
+    }}
+
+    .job-configs {{
+      margin-top: 1.5rem;
+    }}
+
+    .job-config {{
+      margin-top: 1.5rem;
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 1.5rem;
+      background: rgba(3, 10, 14, 0.85);
+      box-shadow: inset 0 0 0 1px rgba(57,255,20,0.08), 0 0 22px rgba(0,0,0,0.35);
+    }}
+
+    .job-config-header {{
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 1.25rem;
+    }}
+
+    .job-config-header h3 {{
+      margin: 0;
+      text-transform: uppercase;
+      letter-spacing: 0.22em;
+      font-size: 0.95rem;
+      color: var(--accent);
+    }}
+
+    .config-grid {{
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 1.25rem;
+    }}
+
+    .config-card {{
+      border: 1px solid rgba(57,255,20,0.25);
+      border-radius: 12px;
+      padding: 1rem;
+      background: rgba(1, 8, 10, 0.6);
+      position: relative;
+      overflow: hidden;
+    }}
+
+    .config-card::after {{
+      content: '';
+      position: absolute;
+      inset: 0;
+      border-radius: inherit;
+      pointer-events: none;
+      box-shadow: 0 0 18px rgba(57,255,20,0.1);
+      opacity: 0;
+      transition: opacity 0.3s ease;
+    }}
+
+    .config-card:hover::after {{
+      opacity: 1;
+    }}
+
+    .config-card h4 {{
+      margin: 0 0 0.75rem;
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      letter-spacing: 0.24em;
+      color: var(--accent);
+    }}
+
+    .config-card.wide {{
+      grid-column: 1 / -1;
+    }}
+
+    .checkbox-grid {{
+      display: grid;
+      gap: 0.5rem;
+      margin-top: 0.75rem;
+    }}
+
+    .job-controls {{
+      margin-top: 1.25rem;
+      text-align: right;
+    }}
+
+    .form-actions {{
+      margin-top: 2rem;
+      text-align: right;
+    }}
+
+    .checkbox-grid label,
+    .checkbox-inline {{
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.16em;
+    }}
+
+    input[type='checkbox'] {{
+      width: auto;
+      accent-color: var(--accent);
+      transform: scale(1.15);
+    }}
+
+    .preview-grid {{
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 0.75rem;
+      margin-top: 0.75rem;
+    }}
+
+    .neon-button {{
+      border: 1px solid var(--accent);
+      background: linear-gradient(135deg, rgba(57,255,20,0.25), rgba(57,255,20,0.05));
+      color: var(--text);
+      padding: 0.65rem 1.75rem;
+      border-radius: 999px;
+      font-size: 0.85rem;
+      text-transform: uppercase;
+      letter-spacing: 0.28em;
+      cursor: pointer;
+      transition: transform 0.18s ease, box-shadow 0.18s ease;
+      box-shadow: 0 0 12px rgba(57,255,20,0.35);
+    }}
+
+    .neon-button:hover {{
+      transform: translateY(-2px);
+      box-shadow: 0 0 22px rgba(57,255,20,0.55);
+    }}
+
+    .neon-button.secondary {{
+      border-color: rgba(0,255,255,0.55);
+      color: rgba(152, 244, 255, 0.95);
+      box-shadow: 0 0 12px rgba(0,255,255,0.32);
+      background: linear-gradient(135deg, rgba(0,255,255,0.25), rgba(0,255,255,0.05));
+    }}
+
+    .neon-button.secondary:hover {{
+      box-shadow: 0 0 22px rgba(0,255,255,0.52);
+    }}
+
+    table {{
+      width: 100%;
+      margin-top: 1rem;
+      border-collapse: collapse;
+      border: 1px solid var(--border);
+      background: rgba(3, 12, 14, 0.78);
+      border-radius: 14px;
+      overflow: hidden;
+      box-shadow: 0 0 18px rgba(0,0,0,0.45);
+    }}
+
+    th, td {{
+      padding: 0.85rem 1rem;
+      border-bottom: 1px solid rgba(57,255,20,0.15);
+      font-size: 0.85rem;
+    }}
+
+    th {{
+      text-transform: uppercase;
+      letter-spacing: 0.2em;
+      color: rgba(152, 244, 255, 0.85);
+      background: rgba(0,255,255,0.05);
+    }}
+
+    tr:last-child td {{
+      border-bottom: none;
+    }}
+
+    a {{
+      color: var(--accent);
+    }}
+
+    .inline-form {{
+      display: inline;
+    }}
+
+    .delete-button {{
+      background: linear-gradient(135deg, rgba(255, 60, 127, 0.5), rgba(255, 0, 128, 0.15));
+      border-color: rgba(255, 60, 127, 0.6);
+      box-shadow: 0 0 16px rgba(255, 60, 127, 0.32);
+    }}
+
+    .message {{
+      margin-bottom: 1.5rem;
+      padding: 0.85rem 1.2rem;
+      border-radius: 999px;
+      border: 1px solid rgba(0,255,255,0.45);
+      background: rgba(0,255,255,0.12);
+      color: rgba(191, 250, 255, 0.95);
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      font-size: 0.8rem;
+    }}
+
+    @media (max-width: 960px) {{
+      body {{
+        padding: 2rem;
+      }}
+      form {{
+        padding: 1.5rem;
+      }}
+    }}
   </style>
 </head>
 <body>
@@ -260,22 +629,24 @@ def _build_home_html(jobs: Iterable[dict[str, Any]], message: str | None = None)
   {message_html}
   <form action=\"/transcribe\" method=\"post\" enctype=\"multipart/form-data\">
     <fieldset>
-      <label for=\"audio_file\">Audio file</label>
+      <label for=\"audio_file\">Audio signal</label>
       <input id=\"audio_file\" name=\"audio_file\" type=\"file\" required />
       <div class=\"job-configs\">
-        <p class=\"help-text\">Configure one or more jobs with different settings to compare their outputs. Each job will reuse the uploaded audio file.</p>
+        <p class=\"help-text\">Queue parallel loadouts to A/B models, prompts, and compute knobs. Every configuration reuses the uploaded audio for rapid experiments.</p>
         <div id=\"jobs-container\">
           {initial_job_block}
         </div>
         <div class=\"job-controls\">
-          <button type=\"button\" id=\"add-job\" class=\"secondary-button\">Add another configuration</button>
+          <button type=\"button\" id=\"add-job\" class=\"neon-button secondary\">Clone config</button>
         </div>
       </div>
     </fieldset>
-    <button type=\"submit\">Start transcription</button>
+    <div class=\"form-actions\">
+      <button type=\"submit\" class=\"neon-button\">Execute Stack</button>
+    </div>
   </form>
 
-  <h2>Jobs</h2>
+  <h2>Run console</h2>
   <table>
     <thead><tr><th>Job</th><th>Status</th><th>Created</th><th>Updated</th><th>Error</th><th>Actions</th></tr></thead>
     <tbody>
@@ -285,6 +656,12 @@ def _build_home_html(jobs: Iterable[dict[str, Any]], message: str | None = None)
   <template id=\"job-template\">
     {template_job_block}
   </template>
+  <datalist id=\"asr-models\">
+    {asr_model_datalist}
+  </datalist>
+  <datalist id=\"compute-types\">
+    {compute_type_datalist}
+  </datalist>
   <script>
     (function() {{
       const container = document.getElementById('jobs-container');
@@ -444,28 +821,180 @@ def _build_job_html(
   <meta charset=\"utf-8\" />
   <title>Job {job_id}</title>
   <style>
-    body {{ font-family: Arial, sans-serif; margin: 2rem; background: #f6f8fa; color: #24292f; }}
-    h1 {{ margin-bottom: 1rem; }}
-    .panel {{ background: #fff; padding: 1.5rem; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 1.5rem; }}
-    .error {{ padding: 0.75rem; background: #ffe3e6; border: 1px solid #ffccd5; border-radius: 6px; margin-top: 1rem; }}
-    ul {{ padding-left: 1.25rem; }}
-    a {{ color: #0969da; }}
-    .delete-form {{ margin-top: 1.5rem; }}
-    .delete-button {{ background: #cf222e; }}
-    .delete-button:hover {{ background: #a40e26; }}
-    .settings-table {{ width: 100%; border-collapse: collapse; margin-top: 0.75rem; }}
-    .settings-table th, .settings-table td {{ padding: 0.5rem; border-bottom: 1px solid #d0d7de; vertical-align: top; }}
-    .settings-table th {{ width: 35%; text-align: left; background: #f0f3f6; }}
-    .settings-table pre {{ margin: 0; white-space: pre-wrap; word-break: break-word; }}
+    :root {{
+      color-scheme: dark;
+      --bg: #010204;
+      --panel: rgba(6, 15, 21, 0.85);
+      --accent: #39ff14;
+      --muted: rgba(152, 244, 255, 0.85);
+      --text: #e9ffee;
+      --danger: #ff3c7f;
+      --border: rgba(57,255,20,0.35);
+      font-family: 'Fira Code', 'JetBrains Mono', Menlo, Consolas, monospace;
+    }}
+
+    body {{
+      margin: 0;
+      padding: 3rem;
+      background: radial-gradient(circle at 15% 20%, rgba(57,255,20,0.12), transparent 45%),
+                  radial-gradient(circle at 80% 85%, rgba(0,255,255,0.12), transparent 40%),
+                  var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+    }}
+
+    a {{
+      color: var(--accent);
+    }}
+
+    h1 {{
+      text-transform: uppercase;
+      letter-spacing: 0.24em;
+      font-size: 2.4rem;
+      margin-bottom: 2rem;
+      text-shadow: 0 0 18px rgba(57,255,20,0.68);
+    }}
+
+    .panel {{
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 1.75rem;
+      margin-bottom: 1.75rem;
+      box-shadow: 0 0 22px rgba(0,0,0,0.45);
+      backdrop-filter: blur(10px);
+    }}
+
+    .meta-grid {{
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 1rem;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }}
+
+    .meta-grid li {{
+      border: 1px solid rgba(57,255,20,0.25);
+      border-radius: 12px;
+      padding: 0.75rem 1rem;
+      font-size: 0.85rem;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      background: rgba(0,0,0,0.35);
+    }}
+
+    .meta-grid strong {{
+      display: block;
+      color: var(--muted);
+      margin-bottom: 0.35rem;
+    }}
+
+    .error {{
+      margin-top: 1.25rem;
+      border: 1px solid rgba(255,60,127,0.65);
+      border-radius: 12px;
+      padding: 0.85rem 1rem;
+      background: rgba(255, 60, 127, 0.2);
+      color: #ffe9f2;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+    }}
+
+    .panel h2 {{
+      text-transform: uppercase;
+      letter-spacing: 0.22em;
+      color: var(--muted);
+      margin-top: 0;
+      margin-bottom: 1rem;
+      font-size: 1rem;
+    }}
+
+    .settings-table {{
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 0.75rem;
+      border: 1px solid rgba(57,255,20,0.25);
+      border-radius: 12px;
+      overflow: hidden;
+    }}
+
+    .settings-table th,
+    .settings-table td {{
+      padding: 0.65rem 0.85rem;
+      border-bottom: 1px solid rgba(57,255,20,0.12);
+      vertical-align: top;
+      font-size: 0.8rem;
+      letter-spacing: 0.08em;
+    }}
+
+    .settings-table th {{
+      width: 28%;
+      text-transform: uppercase;
+      color: var(--muted);
+      background: rgba(0,255,255,0.08);
+    }}
+
+    .settings-table pre {{
+      margin: 0;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }}
+
+    ul {{
+      padding-left: 1.25rem;
+    }}
+
+    .neon-button {{
+      border: 1px solid var(--accent);
+      background: linear-gradient(135deg, rgba(57,255,20,0.25), rgba(57,255,20,0.05));
+      color: var(--text);
+      padding: 0.6rem 1.65rem;
+      border-radius: 999px;
+      text-transform: uppercase;
+      letter-spacing: 0.28em;
+      cursor: pointer;
+      transition: transform 0.18s ease, box-shadow 0.18s ease;
+      box-shadow: 0 0 12px rgba(57,255,20,0.32);
+      font-size: 0.8rem;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+    }}
+
+    .neon-button:hover {{
+      transform: translateY(-2px);
+      box-shadow: 0 0 20px rgba(57,255,20,0.52);
+    }}
+
+    .delete-button {{
+      border-color: rgba(255,60,127,0.75);
+      background: linear-gradient(135deg, rgba(255,60,127,0.5), rgba(255,60,127,0.1));
+      box-shadow: 0 0 16px rgba(255,60,127,0.32);
+    }}
+
+    .delete-form {{
+      margin-top: 1.5rem;
+    }}
+
+    footer {{
+      margin-top: 2.5rem;
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.22em;
+      color: var(--muted);
+    }}
   </style>
 </head>
 <body>
   <h1>Job {job_id}</h1>
   <div class='panel'>
-    <p><strong>Status:</strong> {status}</p>
-    <p><strong>Created:</strong> {created}</p>
-    <p><strong>Updated:</strong> {updated}</p>
-    <p><strong>Source audio:</strong> {audio_name}</p>
+    <ul class='meta-grid'>
+      <li><strong>Status</strong>{status}</li>
+      <li><strong>Created</strong>{created}</li>
+      <li><strong>Updated</strong>{updated}</li>
+      <li><strong>Source audio</strong>{audio_name}</li>
+    </ul>
     {error_block}
   </div>
   {preview_block}
@@ -476,9 +1005,9 @@ def _build_job_html(
     {log_link}
   </div>
   <form action=\"{delete_action}\" method=\"post\" class=\"delete-form\" onsubmit=\"return confirm('Delete this job and all associated files?');\">
-    <button type=\"submit\" class=\"delete-button\">Delete job</button>
+    <button type=\"submit\" class=\"neon-button delete-button\">Delete job</button>
   </form>
-  <p><a href=\"/\">Back to dashboard</a></p>
+  <footer><a href=\"/\">Return to command console</a></footer>
 </body>
 </html>
 """
@@ -692,6 +1221,13 @@ def create_app(base_dir: Optional[Path] = None) -> FastAPI:
                 num_speakers_text = _get_value(index, "num_speakers").strip()
                 asr_device_value = _get_value(index, "asr_device").strip()
                 asr_compute_type_value = _get_value(index, "asr_compute_type").strip()
+                precise_model_value = _get_value(index, "precise_model").strip()
+                precise_device_value = _get_value(index, "precise_device").strip()
+                precise_compute_type_value = _get_value(index, "precise_compute_type").strip()
+                hotwords_text = _get_value(index, "hotwords").strip()
+                initial_prompt_text = _get_value(index, "initial_prompt").strip()
+                spelling_map_text = _get_value(index, "spelling_map").strip()
+                preview_output_text = _get_value(index, "preview_output").strip()
                 vocal_extract_value = _get_value(index, "vocal_extract").strip()
 
                 parsed_num_speakers: Optional[int]
@@ -707,6 +1243,14 @@ def create_app(base_dir: Optional[Path] = None) -> FastAPI:
                 if vocal_choice not in {None, "off", "bandpass"}:
                     raise HTTPException(status_code=400, detail=_detail("Invalid vocal_extract value"))
 
+                for device_choice, label in (
+                    (asr_device_value, "asr_device"),
+                    (precise_device_value, "precise_device"),
+                ):
+                    if device_choice and device_choice not in {"cpu", "cuda", "mps"}:
+                        raise HTTPException(status_code=400, detail=_detail(f"Invalid {label} value"))
+
+                ram_enabled = _get_checkbox(index, "ram")
                 resume_enabled = _get_checkbox(index, "resume")
                 precise_rerun_enabled = _get_checkbox(index, "precise_rerun")
                 preview_enabled_flag = _get_checkbox(index, "preview_enabled")
@@ -748,19 +1292,50 @@ def create_app(base_dir: Optional[Path] = None) -> FastAPI:
                     preview_start_arg = None
                     preview_duration_arg = None
 
+                file_payloads: list[tuple[Path, str]] = []
+                hotwords_path: Optional[Path] = None
+                if hotwords_text:
+                    hotwords_path = inputs_dir / "hotwords.txt"
+                    file_payloads.append((hotwords_path, hotwords_text))
+
+                initial_prompt_path: Optional[Path] = None
+                if initial_prompt_text:
+                    initial_prompt_path = inputs_dir / "initial_prompt.txt"
+                    file_payloads.append((initial_prompt_path, initial_prompt_text))
+
+                spelling_map_path: Optional[Path] = None
+                if spelling_map_text:
+                    spelling_map_path = inputs_dir / "spelling_map.csv"
+                    file_payloads.append((spelling_map_path, spelling_map_text))
+
+                preview_output_path: Optional[Path] = None
+                if preview_output_text:
+                    sanitized_preview_name = safe_filename(preview_output_text)
+                    if not sanitized_preview_name.lower().endswith(".wav"):
+                        sanitized_preview_name += ".wav"
+                    preview_output_path = outputs_dir / sanitized_preview_name
+
                 args = build_cli_args(
                     audio_target,
                     outdir=outputs_dir,
+                    ram=ram_enabled,
                     resume=resume_enabled,
                     num_speakers=parsed_num_speakers,
+                    hotwords_file=hotwords_path,
+                    initial_prompt_file=initial_prompt_path,
+                    spelling_map=spelling_map_path,
                     asr_model=asr_model_value or None,
                     asr_device=asr_device_value or None,
                     asr_compute_type=asr_compute_type_value or None,
                     precise_rerun=precise_rerun_enabled,
+                    precise_model=precise_model_value or None,
+                    precise_device=precise_device_value or None,
+                    precise_compute_type=precise_compute_type_value or None,
                     vocal_extract=vocal_choice,
                     log_level=log_level_value,
                     preview_start=preview_start_arg,
                     preview_duration=preview_duration_arg,
+                    preview_output=preview_output_path,
                 )
 
                 settings_snapshot = {
@@ -796,7 +1371,8 @@ def create_app(base_dir: Optional[Path] = None) -> FastAPI:
                         "metadata": metadata,
                         "status": status_snapshot,
                         "created_at": created_at,
-                    }
+                        "file_payloads": file_payloads,
+                }
                 )
 
             if not job_plans:
@@ -823,6 +1399,10 @@ def create_app(base_dir: Optional[Path] = None) -> FastAPI:
                 inputs_dir.mkdir(exist_ok=True)
                 outputs_dir.mkdir(exist_ok=True)
                 shutil.copyfile(temp_audio_path, audio_path)
+
+                for payload_path, payload_content in plan.get("file_payloads", []):
+                    payload_path.parent.mkdir(parents=True, exist_ok=True)
+                    payload_path.write_text(payload_content, encoding="utf-8")
 
                 _write_json(job_dir / "metadata.json", plan["metadata"])
                 _write_json(job_dir / "status.json", plan["status"])
