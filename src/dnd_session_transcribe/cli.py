@@ -51,6 +51,7 @@ import torch
 import argparse
 import contextlib
 import shutil
+from dataclasses import replace
 
 
 logger = logging.getLogger(__name__)
@@ -155,6 +156,17 @@ PRE  = PreprocessConfig()
 SCR  = ScrubConfig()
 WR   = WritingConfig()
 PROF = ProfilesConfig()   # reserved for profile matching
+
+
+def _clone_pipeline_configs() -> tuple[ASRConfig, DiarizationConfig, PreciseRerunConfig, PreprocessConfig]:
+    """Return independent config instances for a single run."""
+
+    return (
+        replace(ASR),
+        replace(DIA),
+        replace(PREC),
+        replace(PRE),
+    )
 
 
 # ======================= MAIN =======================
@@ -272,29 +284,31 @@ def run_transcription(
                 "Continuing with transcription for preview snippet from %s", original_audio
             )
 
+        asr_cfg, dia_cfg, prec_cfg, pre_cfg = _clone_pipeline_configs()
+
         # CLI → config overrides
         if args.vocal_extract is not None:
-            PRE.vocal_extract = args.vocal_extract
+            pre_cfg.vocal_extract = args.vocal_extract
         if args.hotwords_file:
-            ASR.hotwords_file = args.hotwords_file
+            asr_cfg.hotwords_file = args.hotwords_file
         if args.initial_prompt_file:
-            ASR.initial_prompt_file = args.initial_prompt_file
+            asr_cfg.initial_prompt_file = args.initial_prompt_file
         if args.asr_model:
-            ASR.model = args.asr_model
+            asr_cfg.model = args.asr_model
         if args.asr_device:
-            ASR.device = args.asr_device
+            asr_cfg.device = args.asr_device
         if args.asr_compute_type:
-            ASR.compute_type = args.asr_compute_type
+            asr_cfg.compute_type = args.asr_compute_type
         if args.num_speakers:
-            DIA.num_speakers = args.num_speakers
+            dia_cfg.num_speakers = args.num_speakers
         if args.precise_rerun:
-            PREC.enabled = True
+            prec_cfg.enabled = True
         if args.precise_model:
-            PREC.model = args.precise_model
+            prec_cfg.model = args.precise_model
         if args.precise_device:
-            PREC.device = args.precise_device
+            prec_cfg.device = args.precise_device
         if args.precise_compute_type:
-            PREC.compute_type = args.precise_compute_type
+            prec_cfg.compute_type = args.precise_compute_type
 
         # outdir (auto textN if not provided)
         if outdir is None:
@@ -316,7 +330,7 @@ def run_transcription(
         logger.debug("Source for I/O: %s", src_for_io)
 
         # preprocess (utilities)
-        mode = args.vocal_extract if args.vocal_extract is not None else PRE.vocal_extract
+        mode = args.vocal_extract if args.vocal_extract is not None else pre_cfg.vocal_extract
         VOCAL_AUDIO = preprocess_audio(src_for_io, mode)
         if VOCAL_AUDIO != str(audio):
             logger.info("Preprocessed audio via %s → %s", mode, VOCAL_AUDIO)
@@ -324,10 +338,10 @@ def run_transcription(
             logger.debug("Preprocessing skipped; using original audio")
 
         # hotwords / prompt / spelling
-        hotwords = load_hotwords(ASR.hotwords_file)
+        hotwords = load_hotwords(asr_cfg.hotwords_file)
         if hotwords:
             logger.debug("Loaded hotwords (%d chars)", len(hotwords))
-        init_prompt = load_initial_prompt(ASR.initial_prompt_file)
+        init_prompt = load_initial_prompt(asr_cfg.initial_prompt_file)
         if init_prompt:
             logger.debug("Loaded initial prompt (%d chars)", len(init_prompt))
         sp_rules = load_spelling_map(args.spelling_map)
@@ -339,29 +353,29 @@ def run_transcription(
         logger.debug("Total audio duration (s): %.2f", total_sec)
 
         # ---------------- ASR ----------------
-        fw_segments = run_asr(VOCAL_AUDIO, base, ASR, hotwords, init_prompt, resume=args.resume, total_sec=total_sec)
+        fw_segments = run_asr(VOCAL_AUDIO, base, asr_cfg, hotwords, init_prompt, resume=args.resume, total_sec=total_sec)
         fw_segments = scrub_segments(fw_segments, SCR)
         fw_segments = [s for s in fw_segments if s["end"] > s["start"]]
         atomic_json(f"{base}_fw_segments_scrubbed.json", {"segments": fw_segments})
         logger.debug("Scrubbed segments retained: %d", len(fw_segments))
 
         # ------------- precise re-run (optional) -------------
-        if PREC.enabled:
+        if prec_cfg.enabled:
             spans = find_hard_spans(
                 fw_segments, dur=total_sec,
-                logprob_thr=PREC.thr_logprob, cr_thr=PREC.thr_compratio,
-                nospeech_thr=PREC.thr_nospeech, pad=PREC.pad_s, merge_gap=PREC.merge_gap_s
+                logprob_thr=prec_cfg.thr_logprob, cr_thr=prec_cfg.thr_compratio,
+                nospeech_thr=prec_cfg.thr_nospeech, pad=prec_cfg.pad_s, merge_gap=prec_cfg.merge_gap_s
             )
             logger.debug("Hard span candidates: %s", spans)
             if spans:
                 total = sum(e - s for s, e in spans)
                 logger.info(
                     "Precise rerun on %d span(s) (~%.1fs) using %s beam=%s patience=%s",
-                    len(spans), total, PREC.model, PREC.beam_size, PREC.patience,
+                    len(spans), total, prec_cfg.model, prec_cfg.beam_size, prec_cfg.patience,
                 )
                 repl = rerun_precise_on_spans(
-                    VOCAL_AUDIO, spans, "en", PREC.model, PREC.compute_type,
-                    PREC.device, PREC.beam_size, PREC.patience, PREC.window_max_s
+                    VOCAL_AUDIO, spans, "en", prec_cfg.model, prec_cfg.compute_type,
+                    prec_cfg.device, prec_cfg.beam_size, prec_cfg.patience, prec_cfg.window_max_s
                 )
                 fw_segments = splice_segments(fw_segments, repl)
                 fw_segments = scrub_segments(fw_segments, SCR)
@@ -383,11 +397,11 @@ def run_transcription(
         torch.backends.cudnn.allow_tf32 = True
 
         fw_segments = clamp_to_duration(fw_segments, total_sec)
-        aligned = run_alignment(fw_segments, VOCAL_AUDIO, ASR.device, base, resume=args.resume)
+        aligned = run_alignment(fw_segments, VOCAL_AUDIO, asr_cfg.device, base, resume=args.resume)
 
         # ---------------- diarization ----------------
         token = ensure_hf_token()
-        dia_df = run_diarization(VOCAL_AUDIO, ASR.device, DIA, token, total_sec, base, resume=args.resume)
+        dia_df = run_diarization(VOCAL_AUDIO, asr_cfg.device, dia_cfg, token, total_sec, base, resume=args.resume)
         if dia_df.empty:
             raise SystemExit("[diarize] no speaker regions produced")
 
