@@ -10,11 +10,13 @@ import logging
 import os
 import re
 import secrets
+import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable, Optional
+from urllib.parse import quote, quote_plus
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 
 from . import cli
@@ -118,14 +120,25 @@ def _checkbox_to_bool(value: Optional[str]) -> bool:
 def _build_home_html(jobs: Iterable[dict[str, Any]], message: str | None = None) -> str:
     rows = []
     for job in jobs:
-        job_id = html.escape(job.get("job_id", ""))
+        raw_job_id = job.get("job_id", "")
+        job_id_text = str(raw_job_id)
+        job_id = html.escape(job_id_text)
+        job_href = html.escape(f"/runs/{quote(job_id_text, safe='')}")
+        delete_action = html.escape(
+            f"/runs/{quote(job_id_text, safe='')}/delete"
+        )
         status = html.escape(job.get("status", "unknown"))
         created = html.escape(job.get("created_at", ""))
         updated = html.escape(job.get("updated_at", ""))
         error = html.escape(job.get("error", "") or "")
         rows.append(
-            f"<tr><td><a href=\"/runs/{job_id}\">{job_id}</a></td>"
-            f"<td>{status}</td><td>{created}</td><td>{updated}</td><td>{error}</td></tr>"
+            "<tr>"
+            f"<td><a href=\"{job_href}\">{job_id}</a></td>"
+            f"<td>{status}</td><td>{created}</td><td>{updated}</td><td>{error}</td>"
+            f"<td><form action=\"{delete_action}\" method=\"post\" class=\"inline-form\" "
+            "onsubmit=\"return confirm('Delete this job and all associated files?');\">"
+            "<button type=\"submit\" class=\"delete-button\">Delete</button></form></td>"
+            "</tr>"
         )
 
     message_html = f"<div class='message'>{html.escape(message)}</div>" if message else ""
@@ -153,6 +166,9 @@ def _build_home_html(jobs: Iterable[dict[str, Any]], message: str | None = None)
     .preview-box {{ margin-top: 1rem; padding: 1rem; background: #f6f8fa; border: 1px solid #d0d7de; border-radius: 6px; }}
     .preview-box label {{ margin-top: 0.5rem; font-weight: 500; }}
     .help-text {{ font-size: 0.85rem; color: #57606a; margin-top: 0.25rem; }}
+    .inline-form {{ display: inline; }}
+    .delete-button {{ background: #cf222e; margin-top: 0; }}
+    .delete-button:hover {{ background: #a40e26; }}
   </style>
 </head>
 <body>
@@ -213,9 +229,9 @@ def _build_home_html(jobs: Iterable[dict[str, Any]], message: str | None = None)
 
   <h2>Jobs</h2>
   <table>
-    <thead><tr><th>Job</th><th>Status</th><th>Created</th><th>Updated</th><th>Error</th></tr></thead>
+    <thead><tr><th>Job</th><th>Status</th><th>Created</th><th>Updated</th><th>Error</th><th>Actions</th></tr></thead>
     <tbody>
-      {''.join(rows) if rows else "<tr><td colspan='5'>No jobs yet.</td></tr>"}
+      {''.join(rows) if rows else "<tr><td colspan='6'>No jobs yet.</td></tr>"}
     </tbody>
   </table>
 </body>
@@ -230,12 +246,15 @@ def _build_job_html(
     preview: dict[str, Any] | None = None,
     preview_url: str | None = None,
 ) -> str:
-    job_id = html.escape(job.get("job_id", ""))
+    raw_job_id = job.get("job_id", "")
+    job_id_text = str(raw_job_id)
+    job_id = html.escape(job_id_text)
     status = html.escape(job.get("status", "unknown"))
     created = html.escape(job.get("created_at", ""))
     updated = html.escape(job.get("updated_at", ""))
     error = html.escape(job.get("error", "") or "")
     audio_name = html.escape(job.get("audio_filename", ""))
+    delete_action = html.escape(f"/runs/{quote(job_id_text, safe='')}/delete")
 
     file_rows = []
     for label, url in files:
@@ -292,6 +311,9 @@ def _build_job_html(
     .error {{ padding: 0.75rem; background: #ffe3e6; border: 1px solid #ffccd5; border-radius: 6px; margin-top: 1rem; }}
     ul {{ padding-left: 1.25rem; }}
     a {{ color: #0969da; }}
+    .delete-form {{ margin-top: 1.5rem; }}
+    .delete-button {{ background: #cf222e; }}
+    .delete-button:hover {{ background: #a40e26; }}
   </style>
 </head>
 <body>
@@ -309,6 +331,9 @@ def _build_job_html(
     {file_list}
     {log_link}
   </div>
+  <form action=\"{delete_action}\" method=\"post\" class=\"delete-form\" onsubmit=\"return confirm('Delete this job and all associated files?');\">
+    <button type=\"submit\" class=\"delete-button\">Delete job</button>
+  </form>
   <p><a href=\"/\">Back to dashboard</a></p>
 </body>
 </html>
@@ -425,9 +450,10 @@ def create_app(base_dir: Optional[Path] = None) -> FastAPI:
             cli.PREC.compute_type = original_settings["PREC"]["compute_type"]
 
     @app.get("/", response_class=HTMLResponse)
-    async def home() -> str:
+    async def home(request: Request) -> str:
         jobs = _list_jobs()
-        return _build_home_html(jobs)
+        message = request.query_params.get("message")
+        return _build_home_html(jobs, message)
 
     @app.post("/transcribe")
     async def transcribe(
@@ -585,6 +611,21 @@ def create_app(base_dir: Optional[Path] = None) -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail="Invalid file path") from exc
         return FileResponse(target)
+
+    @app.post("/runs/{job_id}/delete")
+    async def delete_job(job_id: str) -> RedirectResponse:
+        job_dir = _job_dir(job_id)
+        if not job_dir.exists() or not job_dir.is_dir():
+            raise HTTPException(status_code=404, detail="Job not found")
+
+        try:
+            shutil.rmtree(job_dir)
+        except Exception as exc:  # pylint: disable=broad-except
+            LOGGER.exception("Failed to delete job %s", job_id)
+            raise HTTPException(status_code=500, detail="Failed to delete job") from exc
+
+        message = quote_plus(f"Deleted job {job_id}")
+        return RedirectResponse(url=f"/?message={message}", status_code=303)
 
     return app
 

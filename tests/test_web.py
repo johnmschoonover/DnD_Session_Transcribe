@@ -89,3 +89,22 @@ def test_show_job_lists_outputs_from_reported_directory(tmp_path: Path) -> None:
 
     assert "example_preview.wav" in html
     assert "Preview snippet" in html
+
+
+def test_delete_job_removes_directory(tmp_path: Path) -> None:
+    app = web.create_app(tmp_path)
+    job_id = "job-delete"
+    job_dir = tmp_path / job_id
+    job_dir.mkdir()
+    (job_dir / "status.json").write_text(json.dumps({"job_id": job_id}), encoding="utf-8")
+    (job_dir / "metadata.json").write_text(json.dumps({"job_id": job_id}), encoding="utf-8")
+    (job_dir / "outputs").mkdir()
+
+    delete_route = next(
+        route for route in app.routes if getattr(route, "path", None) == "/runs/{job_id}/delete"
+    )
+    response = asyncio.run(delete_route.endpoint(job_id=job_id))
+
+    assert response.status_code == 303
+    assert response.headers["location"] == f"/?message=Deleted+job+{job_id}"
+    assert not job_dir.exists()
