@@ -34,6 +34,22 @@ def normalize_diarization_to_df(d, audio_dur: float, speaker_prefix: str) -> pd.
             for seg, _, lab in d.itertracks(yield_label=True):  # type: ignore[call-arg]
                 rows.append({"start": float(seg.start), "end": float(seg.end), "speaker": str(lab)})
             df = pd.DataFrame(rows)
+        elif isinstance(d, pd.DataFrame):
+            # Accept DataFrame-like diarization results (e.g., already converted Annotation)
+            col_map = {col.lower(): col for col in d.columns}
+            start_col = col_map.get("start")
+            end_col = col_map.get("end")
+            speaker_col = col_map.get("speaker") or col_map.get("label")
+
+            if start_col and end_col and speaker_col:
+                df = d[[start_col, end_col, speaker_col]].copy()
+                df.columns = ["start", "end", "speaker"]
+            elif start_col and end_col:
+                df = d[[start_col, end_col]].copy()
+                df.columns = ["start", "end"]
+                df["speaker"] = f"{speaker_prefix}00"
+            else:
+                df = pd.DataFrame(columns=["start", "end", "speaker"])
         else:
             if isinstance(d, list) and d and isinstance(d[0], dict):
                 df = pd.DataFrame([
