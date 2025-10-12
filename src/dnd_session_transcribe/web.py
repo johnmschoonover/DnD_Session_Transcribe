@@ -118,15 +118,22 @@ def _checkbox_to_bool(value: Optional[str]) -> bool:
 
 
 def _build_home_html(jobs: Iterable[dict[str, Any]], message: str | None = None) -> str:
-    rows = []
+    def _options_html(options: list[tuple[str, str]], selected: str) -> str:
+        rendered: list[str] = []
+        for value, label in options:
+            safe_value = html.escape(value, quote=True)
+            safe_label = html.escape(label)
+            selected_attr = " selected" if value == selected else ""
+            rendered.append(f"<option value=\"{safe_value}\"{selected_attr}>{safe_label}</option>")
+        return "".join(rendered)
+
+    rows: list[str] = []
     for job in jobs:
         raw_job_id = job.get("job_id", "")
         job_id_text = str(raw_job_id)
         job_id = html.escape(job_id_text)
         job_href = html.escape(f"/runs/{quote(job_id_text, safe='')}")
-        delete_action = html.escape(
-            f"/runs/{quote(job_id_text, safe='')}/delete"
-        )
+        delete_action = html.escape(f"/runs/{quote(job_id_text, safe='')}/delete")
         status = html.escape(job.get("status", "unknown"))
         created = html.escape(job.get("created_at", ""))
         updated = html.escape(job.get("updated_at", ""))
@@ -134,14 +141,81 @@ def _build_home_html(jobs: Iterable[dict[str, Any]], message: str | None = None)
         rows.append(
             "<tr>"
             f"<td><a href=\"{job_href}\" target=\"_blank\" rel=\"noopener noreferrer\">{job_id}</a></td>"
-            f"<td>{status}</td><td>{created}</td><td>{updated}</td><td>{error}</td>"
-            f"<td><form action=\"{delete_action}\" method=\"post\" class=\"inline-form\" "
+            f"<td><span class='status-badge'>{status}</span></td>"
+            f"<td>{created}</td><td>{updated}</td><td>{error}</td>"
+            "<td>"
+            f"  <form action=\"{delete_action}\" method=\"post\" class=\"inline-form\" "
             "onsubmit=\"return confirm('Delete this job and all associated files?');\">"
-            "<button type=\"submit\" class=\"delete-button\">Delete</button></form></td>"
+            "    <button type=\"submit\" class=\"button button-danger\">Delete</button>"
+            "  </form>"
+            "</td>"
             "</tr>"
         )
 
-    message_html = f"<div class='message'>{html.escape(message)}</div>" if message else ""
+    message_html = (
+        f"<div class='flash success'><span>{html.escape(message)}</span></div>"
+        if message
+        else ""
+    )
+
+    log_default = "DEBUG" if "DEBUG" in cli.LOG_LEVELS else cli.LOG.level
+    log_options = _options_html([(level, level) for level in cli.LOG_LEVELS], log_default)
+
+    asr_model_options = [
+        ("", "Auto (use configured default)"),
+        ("large-v3", "large-v3 (maximum accuracy)"),
+        ("distil-large-v3", "distil-large-v3"),
+        ("large-v2", "large-v2"),
+        ("medium", "medium"),
+        ("small", "small"),
+        ("base", "base"),
+        ("tiny", "tiny"),
+        ("turbo", "turbo"),
+    ]
+    asr_model_default = "large-v3"
+    asr_model_select = _options_html(asr_model_options, asr_model_default)
+
+    num_speakers_options = [("", "Auto-detect"), *[(str(count), f"{count} speakers") for count in range(2, 9)]]
+    num_speakers_default = "8"
+    num_speakers_select = _options_html(num_speakers_options, num_speakers_default)
+
+    device_options = [
+        ("", "Auto (prefer GPU if available)"),
+        ("cuda", "CUDA"),
+        ("mps", "Apple Metal"),
+        ("cpu", "CPU"),
+    ]
+    device_default = "cuda"
+    asr_device_select = _options_html(device_options, device_default)
+
+    compute_type_options = [
+        ("float16", "float16 (fast & precise)"),
+        ("float32", "float32"),
+        ("int8_float16", "int8_float16"),
+        ("int8_float32", "int8_float32"),
+        ("int8", "int8"),
+        ("", "Auto"),
+    ]
+    compute_default = "float16"
+    asr_compute_select = _options_html(compute_type_options, compute_default)
+
+    precise_model_options = [
+        ("", "Auto (reuse ASR model)"),
+        ("large-v3", "large-v3"),
+        ("distil-large-v3", "distil-large-v3"),
+        ("large-v2", "large-v2"),
+        ("medium", "medium"),
+    ]
+    precise_model_select = _options_html(precise_model_options, "large-v3")
+    precise_device_select = _options_html(device_options, device_default)
+    precise_compute_select = _options_html(compute_type_options, compute_default)
+
+    vocal_extract_options = [
+        ("bandpass", "Bandpass (emphasize dialogue)"),
+        ("", "Disabled"),
+        ("off", "Bypass isolation"),
+    ]
+    vocal_extract_select = _options_html(vocal_extract_options, "bandpass")
 
     return f"""
 <!DOCTYPE html>
@@ -150,90 +224,329 @@ def _build_home_html(jobs: Iterable[dict[str, Any]], message: str | None = None)
   <meta charset=\"utf-8\" />
   <title>DnD Session Transcribe Web UI</title>
   <style>
-    body {{ font-family: Arial, sans-serif; margin: 2rem; background: #f6f8fa; color: #24292f; }}
-    h1 {{ margin-bottom: 1rem; }}
-    form {{ background: #fff; padding: 1.5rem; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 2rem; }}
-    fieldset {{ border: none; padding: 0; margin: 0; }}
-    label {{ display: block; margin-top: 0.75rem; font-weight: 600; }}
-    input[type='text'], select {{ width: 100%; padding: 0.5rem; border: 1px solid #d0d7de; border-radius: 6px; }}
-    input[type='file'] {{ margin-top: 0.5rem; }}
-    button {{ margin-top: 1.5rem; background: #2da44e; border: none; color: #fff; padding: 0.75rem 1.5rem; border-radius: 6px; cursor: pointer; font-size: 1rem; }}
-    button:hover {{ background: #2c974b; }}
-    table {{ width: 100%; border-collapse: collapse; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }}
-    th, td {{ padding: 0.75rem; border-bottom: 1px solid #d0d7de; text-align: left; }}
-    th {{ background: #f0f3f6; }}
-    .message {{ margin-bottom: 1rem; padding: 0.75rem; background: #fff3cd; border: 1px solid #ffe69c; border-radius: 6px; }}
-    .preview-box {{ margin-top: 1rem; padding: 1rem; background: #f6f8fa; border: 1px solid #d0d7de; border-radius: 6px; }}
-    .preview-box label {{ margin-top: 0.5rem; font-weight: 500; }}
-    .help-text {{ font-size: 0.85rem; color: #57606a; margin-top: 0.25rem; }}
+    :root {{
+      color-scheme: dark;
+      --bg: radial-gradient(circle at 15% 20%, rgba(61, 255, 108, 0.12), transparent 55%),
+            radial-gradient(circle at 85% 15%, rgba(82, 220, 255, 0.08), transparent 50%),
+            #050b07;
+      --panel: rgba(6, 20, 12, 0.82);
+      --panel-border: rgba(61, 255, 108, 0.35);
+      --panel-hover: rgba(10, 34, 20, 0.92);
+      --accent: #3dff6c;
+      --accent-soft: rgba(61, 255, 108, 0.18);
+      --accent-strong: rgba(61, 255, 108, 0.35);
+      --muted: #79ffb1;
+      --text: #e0ffe9;
+      --danger: #ff4d6d;
+      --danger-soft: rgba(255, 77, 109, 0.15);
+    }}
+    * {{ box-sizing: border-box; }}
+    body {{
+      font-family: 'Fira Code', 'Source Code Pro', 'Courier New', monospace;
+      margin: 0;
+      padding: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+      display: flex;
+      justify-content: center;
+      padding: 3rem 1.5rem;
+    }}
+    main {{
+      width: min(1120px, 100%);
+      display: grid;
+      gap: 2rem;
+    }}
+    header {{
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 1.5rem;
+    }}
+    header h1 {{
+      font-size: clamp(1.8rem, 2.6vw, 2.4rem);
+      text-shadow: 0 0 22px rgba(61, 255, 108, 0.45);
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      margin: 0;
+    }}
+    header .tagline {{
+      color: var(--muted);
+      font-size: 0.95rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }}
+    .panel {{
+      background: var(--panel);
+      border: 1px solid var(--panel-border);
+      border-radius: 16px;
+      padding: 2rem;
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.35);
+      backdrop-filter: blur(12px);
+      transition: border-color 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
+    }}
+    .panel:hover {{
+      border-color: var(--accent-strong);
+      transform: translateY(-2px);
+      box-shadow: 0 24px 48px rgba(0, 0, 0, 0.4);
+      background: var(--panel-hover);
+    }}
+    form fieldset {{
+      display: grid;
+      gap: 1.35rem;
+      border: none;
+      padding: 0;
+      margin: 0;
+    }}
+    .field-group {{
+      display: grid;
+      gap: 0.55rem;
+    }}
+    label {{
+      font-size: 0.85rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }}
+    select, input[type='text'], input[type='file'] {{
+      width: 100%;
+      padding: 0.75rem 0.85rem;
+      border-radius: 10px;
+      border: 1px solid rgba(61, 255, 108, 0.25);
+      background: rgba(5, 14, 9, 0.75);
+      color: var(--text);
+      font-family: inherit;
+      font-size: 0.95rem;
+      transition: border-color 0.2s ease, box-shadow 0.2s ease;
+    }}
+    select:focus, input[type='text']:focus {{
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-soft);
+    }}
+    input[type='file'] {{
+      padding: 0.5rem 0;
+    }}
+    .section-title {{
+      font-size: 1rem;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin: 0;
+    }}
+    .grid-two {{
+      display: grid;
+      gap: 1.25rem;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    }}
+    .preview-box {{
+      border: 1px dashed var(--accent-strong);
+      border-radius: 14px;
+      padding: 1.1rem 1.35rem;
+      background: rgba(6, 22, 12, 0.6);
+      display: grid;
+      gap: 0.75rem;
+    }}
+    .preview-box label {{
+      text-transform: none;
+      letter-spacing: 0.02em;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-size: 0.95rem;
+    }}
+    .preview-box input[type='checkbox'] {{
+      width: 1.15rem;
+      height: 1.15rem;
+      accent-color: var(--accent);
+    }}
+    .help-text {{
+      font-size: 0.85rem;
+      color: rgba(224, 255, 233, 0.72);
+      line-height: 1.4;
+    }}
+    .button {{
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      padding: 0.9rem 1.8rem;
+      border-radius: 999px;
+      border: 1px solid var(--accent);
+      background: linear-gradient(135deg, rgba(61, 255, 108, 0.9), rgba(61, 255, 108, 0.55));
+      color: #041b0b;
+      cursor: pointer;
+      transition: transform 0.18s ease, box-shadow 0.18s ease;
+      box-shadow: 0 18px 36px rgba(61, 255, 108, 0.25);
+    }}
+    .button:hover {{
+      transform: translateY(-2px);
+      box-shadow: 0 22px 44px rgba(61, 255, 108, 0.32);
+    }}
+    .button:active {{
+      transform: translateY(0);
+      box-shadow: 0 16px 32px rgba(61, 255, 108, 0.24);
+    }}
+    .button-danger {{
+      border-color: var(--danger);
+      background: linear-gradient(135deg, rgba(255, 77, 109, 0.92), rgba(255, 77, 109, 0.6));
+      color: #fff;
+      box-shadow: 0 18px 36px var(--danger-soft);
+    }}
     .inline-form {{ display: inline; }}
-    .delete-button {{ background: #cf222e; margin-top: 0; }}
-    .delete-button:hover {{ background: #a40e26; }}
+    .flash {{
+      padding: 0.9rem 1.25rem;
+      border-radius: 12px;
+      border: 1px solid var(--accent-strong);
+      background: rgba(6, 28, 16, 0.7);
+      box-shadow: inset 0 0 0 1px rgba(61, 255, 108, 0.1);
+      display: inline-flex;
+      align-items: center;
+      gap: 0.6rem;
+      font-size: 0.9rem;
+      letter-spacing: 0.04em;
+    }}
+    table {{
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 1.5rem;
+    }}
+    thead th {{
+      font-size: 0.75rem;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: rgba(224, 255, 233, 0.64);
+      text-align: left;
+      padding: 0 0 0.75rem 0;
+    }}
+    tbody td {{
+      padding: 0.75rem 0;
+      border-top: 1px solid rgba(224, 255, 233, 0.08);
+      font-size: 0.95rem;
+    }}
+    tbody tr:first-child td {{ border-top: none; }}
+    tbody tr:hover td {{
+      background: rgba(6, 24, 13, 0.55);
+    }}
+    a {{
+      color: var(--accent);
+      text-decoration: none;
+      transition: text-shadow 0.2s ease;
+    }}
+    a:hover {{
+      text-shadow: 0 0 12px rgba(61, 255, 108, 0.6);
+    }}
+    .status-badge {{
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0.3rem 0.75rem;
+      border-radius: 999px;
+      font-size: 0.8rem;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      border: 1px solid var(--accent-strong);
+      background: rgba(61, 255, 108, 0.12);
+    }}
   </style>
 </head>
 <body>
-  <h1>DnD Session Transcribe</h1>
-  {message_html}
-  <form action=\"/transcribe\" method=\"post\" enctype=\"multipart/form-data\">
-    <fieldset>
-      <label for=\"audio_file\">Audio file</label>
-      <input id=\"audio_file\" name=\"audio_file\" type=\"file\" required />
+  <main>
+    <header>
+      <h1>DnD Session Transcribe</h1>
+      <span class="tagline">Hyper-focused inference control</span>
+    </header>
+    {message_html}
+    <form class="panel" action="/transcribe" method="post" enctype="multipart/form-data">
+      <fieldset>
+        <div class="field-group">
+          <span class="section-title">Upload</span>
+          <input id="audio_file" name="audio_file" type="file" required />
+        </div>
+        <div class="field-group">
+          <span class="section-title">Logging</span>
+          <select id="log_level" name="log_level">{log_options}</select>
+        </div>
+        <div class="field-group">
+          <span class="section-title">Recognition strategy</span>
+          <div class="grid-two">
+            <div>
+              <label for="asr_model">Faster-Whisper model</label>
+              <select id="asr_model" name="asr_model">{asr_model_select}</select>
+            </div>
+            <div>
+              <label for="num_speakers">Speaker count hint</label>
+              <select id="num_speakers" name="num_speakers">{num_speakers_select}</select>
+            </div>
+            <div>
+              <label for="asr_device">Inference device</label>
+              <select id="asr_device" name="asr_device">{asr_device_select}</select>
+            </div>
+            <div>
+              <label for="asr_compute_type">Compute precision</label>
+              <select id="asr_compute_type" name="asr_compute_type">{asr_compute_select}</select>
+            </div>
+          </div>
+        </div>
+        <div class="field-group">
+          <span class="section-title">Precision rerun</span>
+          <div class="grid-two">
+            <div>
+              <label for="precise_model">Model</label>
+              <select id="precise_model" name="precise_model">{precise_model_select}</select>
+            </div>
+            <div>
+              <label for="precise_device">Device</label>
+              <select id="precise_device" name="precise_device">{precise_device_select}</select>
+            </div>
+            <div>
+              <label for="precise_compute_type">Compute precision</label>
+              <select id="precise_compute_type" name="precise_compute_type">{precise_compute_select}</select>
+            </div>
+            <div>
+              <label for="vocal_extract">Pre-processing</label>
+              <select id="vocal_extract" name="vocal_extract">{vocal_extract_select}</select>
+            </div>
+          </div>
+          <label><input type="checkbox" name="precise_rerun" value="true" checked /> Enable precise rerun pass</label>
+        </div>
+        <div class="field-group">
+          <span class="section-title">Preview</span>
+          <div class="preview-box">
+            <label><input type="checkbox" name="preview_enabled" value="true" checked /> Render a high-intensity preview snippet</label>
+            <div class="grid-two">
+              <div>
+                <label for="preview_start">Preview start (seconds or MM:SS)</label>
+                <input id="preview_start" name="preview_start" type="text" placeholder="e.g. 1:30" />
+              </div>
+              <div>
+                <label for="preview_duration">Preview duration (seconds)</label>
+                <input id="preview_duration" name="preview_duration" type="text" placeholder="default: 10" />
+              </div>
+            </div>
+            <div class="help-text">Snippets help you quickly verify diarization and text quality before the full run finishes.</div>
+          </div>
+        </div>
+        <label><input type="checkbox" name="resume" value="true" /> Resume from cached checkpoints</label>
+      </fieldset>
+      <button class="button" type="submit">Launch aggressive transcription</button>
+    </form>
 
-      <label for=\"log_level\">Log level</label>
-      <select id=\"log_level\" name=\"log_level\">
-        {''.join(f"<option value='{level}'>{level}</option>" for level in cli.LOG_LEVELS)}
-      </select>
-
-      <label for=\"asr_model\">Faster-Whisper model override (optional)</label>
-      <input id=\"asr_model\" name=\"asr_model\" type=\"text\" placeholder=\"e.g. tiny, base, large-v3\" />
-
-      <label for=\"num_speakers\">Number of speakers (optional)</label>
-      <input id=\"num_speakers\" name=\"num_speakers\" type=\"text\" inputmode=\"numeric\" placeholder=\"e.g. 4\" />
-
-      <label for=\"asr_device\">ASR device override</label>
-      <select id=\"asr_device\" name=\"asr_device\">
-        <option value=\"\">(default)</option>
-        <option value=\"cpu\">cpu</option>
-        <option value=\"cuda\">cuda</option>
-        <option value=\"mps\">mps</option>
-      </select>
-
-      <label for=\"asr_compute_type\">ASR compute type override</label>
-      <input id=\"asr_compute_type\" name=\"asr_compute_type\" type=\"text\" placeholder=\"e.g. float16\" />
-
-      <label for=\"vocal_extract\">Preprocessing</label>
-      <select id=\"vocal_extract\" name=\"vocal_extract\">
-        <option value=\"\">(default)</option>
-        <option value=\"off\">off</option>
-        <option value=\"bandpass\">bandpass</option>
-      </select>
-
-      <div class=\"preview-box\">
-        <label><input type=\"checkbox\" name=\"preview_enabled\" value=\"true\" /> Render preview snippet</label>
-        <label for=\"preview_start\">Preview start (seconds or MM:SS)</label>
-        <input id=\"preview_start\" name=\"preview_start\" type=\"text\" placeholder=\"e.g. 1:30\" />
-        <label for=\"preview_duration\">Preview duration (seconds)</label>
-        <input id=\"preview_duration\" name=\"preview_duration\" type=\"text\" placeholder=\"default: 10\" />
-        <div class=\"help-text\">When enabled, the snippet audio and transcripts will be generated alongside the full outputs.</div>
-      </div>
-
-      <div style=\"margin-top: 0.75rem;\">
-        <label><input type=\"checkbox\" name=\"resume\" value=\"true\" /> Resume from cached checkpoints</label>
-      </div>
-      <div>
-        <label><input type=\"checkbox\" name=\"precise_rerun\" value=\"true\" /> Enable precise re-run</label>
-      </div>
-    </fieldset>
-    <button type=\"submit\">Start transcription</button>
-  </form>
-
-  <h2>Jobs</h2>
-  <table>
-    <thead><tr><th>Job</th><th>Status</th><th>Created</th><th>Updated</th><th>Error</th><th>Actions</th></tr></thead>
-    <tbody>
-      {''.join(rows) if rows else "<tr><td colspan='6'>No jobs yet.</td></tr>"}
-    </tbody>
-  </table>
+    <section class="panel">
+      <header style="display:flex;justify-content:space-between;align-items:center;gap:1rem;">
+        <h2 class="section-title">Active jobs</h2>
+      </header>
+      <table>
+        <thead><tr><th>Job</th><th>Status</th><th>Created</th><th>Updated</th><th>Error</th><th>Actions</th></tr></thead>
+        <tbody>
+          {''.join(rows) if rows else "<tr><td colspan='6'>No jobs yet.</td></tr>"}
+        </tbody>
+      </table>
+    </section>
+  </main>
 </body>
 </html>
 """
@@ -290,58 +603,260 @@ def _build_job_html(
     if preview_url:
         escaped_url = html.escape(preview_url)
         preview_block = (
-            "<div class='panel'>"
+            "<section class='panel preview-panel'>"
             "  <h2>Preview snippet</h2>"
             f"  <audio controls src=\"{escaped_url}\" preload=\"none\"></audio>"
             f"  {details_html}"
-            "</div>"
+            "</section>"
         )
     elif preview_requested:
         preview_block = (
-            "<div class='panel'>"
+            "<section class='panel preview-panel'>"
             "  <h2>Preview snippet</h2>"
-            "  <p>Preview rendering in progress. The audio will appear once the job completes.</p>"
+            "  <p class='muted'>Preview rendering in progress. The audio will appear once the job completes.</p>"
             f"  {details_html}"
-            "</div>"
+            "</section>"
         )
 
     return f"""
 <!DOCTYPE html>
-<html lang=\"en\">
+<html lang="en">
 <head>
-  <meta charset=\"utf-8\" />
+  <meta charset="utf-8" />
   <title>Job {job_id}</title>
   <style>
-    body {{ font-family: Arial, sans-serif; margin: 2rem; background: #f6f8fa; color: #24292f; }}
-    h1 {{ margin-bottom: 1rem; }}
-    .panel {{ background: #fff; padding: 1.5rem; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 1.5rem; }}
-    .error {{ padding: 0.75rem; background: #ffe3e6; border: 1px solid #ffccd5; border-radius: 6px; margin-top: 1rem; }}
-    ul {{ padding-left: 1.25rem; }}
-    a {{ color: #0969da; }}
-    .delete-form {{ margin-top: 1.5rem; }}
-    .delete-button {{ background: #cf222e; }}
-    .delete-button:hover {{ background: #a40e26; }}
+    :root {{
+      color-scheme: dark;
+      --bg: radial-gradient(circle at 20% 20%, rgba(61, 255, 108, 0.12), transparent 50%),
+            radial-gradient(circle at 80% 10%, rgba(82, 220, 255, 0.1), transparent 55%),
+            #050b07;
+      --panel: rgba(6, 20, 12, 0.82);
+      --panel-border: rgba(61, 255, 108, 0.35);
+      --panel-hover: rgba(10, 34, 20, 0.92);
+      --accent: #3dff6c;
+      --accent-soft: rgba(61, 255, 108, 0.18);
+      --accent-strong: rgba(61, 255, 108, 0.35);
+      --muted: #79ffb1;
+      --text: #e0ffe9;
+      --danger: #ff4d6d;
+      --danger-soft: rgba(255, 77, 109, 0.18);
+    }}
+    * {{ box-sizing: border-box; }}
+    body {{
+      font-family: 'Fira Code', 'Source Code Pro', 'Courier New', monospace;
+      margin: 0;
+      padding: 3rem 1.5rem;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+      display: flex;
+      justify-content: center;
+    }}
+    main {{
+      width: min(960px, 100%);
+      display: grid;
+      gap: 1.75rem;
+    }}
+    header {{
+      display: flex;
+      flex-wrap: wrap;
+      align-items: baseline;
+      gap: 0.75rem 1.5rem;
+      justify-content: space-between;
+    }}
+    header h1 {{
+      font-size: clamp(1.8rem, 2.4vw, 2.3rem);
+      text-shadow: 0 0 22px rgba(61, 255, 108, 0.45);
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      margin: 0;
+    }}
+    header .meta {{
+      font-size: 0.9rem;
+      color: rgba(224, 255, 233, 0.78);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }}
+    .panel {{
+      background: var(--panel);
+      border: 1px solid var(--panel-border);
+      border-radius: 16px;
+      padding: 1.8rem 2rem;
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.35);
+      backdrop-filter: blur(12px);
+      transition: border-color 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
+    }}
+    .panel:hover {{
+      border-color: var(--accent-strong);
+      transform: translateY(-2px);
+      box-shadow: 0 24px 48px rgba(0, 0, 0, 0.4);
+      background: var(--panel-hover);
+    }}
+    h2 {{
+      margin-top: 0;
+      margin-bottom: 1.1rem;
+      font-size: 1rem;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }}
+    .status-grid {{
+      display: grid;
+      gap: 0.75rem 1.25rem;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    }}
+    .status-item {{
+      display: flex;
+      flex-direction: column;
+      gap: 0.35rem;
+    }}
+    .status-label {{
+      font-size: 0.75rem;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: rgba(224, 255, 233, 0.68);
+    }}
+    .status-value {{
+      font-size: 1rem;
+      letter-spacing: 0.04em;
+    }}
+    .status-chip {{
+      display: inline-flex;
+      padding: 0.4rem 0.85rem;
+      border-radius: 999px;
+      border: 1px solid var(--accent-strong);
+      background: rgba(61, 255, 108, 0.12);
+      font-size: 0.85rem;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }}
+    .muted {{
+      color: rgba(224, 255, 233, 0.72);
+    }}
+    .error {{
+      padding: 0.95rem 1.1rem;
+      border-radius: 12px;
+      border: 1px solid var(--danger);
+      background: var(--danger-soft);
+      color: #ffe9ee;
+      margin-top: 1.1rem;
+      box-shadow: inset 0 0 0 1px rgba(255, 77, 109, 0.35);
+    }}
+    ul {{
+      padding-left: 1.2rem;
+      margin: 0;
+      display: grid;
+      gap: 0.4rem;
+    }}
+    li {{
+      list-style: none;
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+    }}
+    li::before {{
+      content: '➜';
+      color: var(--accent);
+    }}
+    a {{
+      color: var(--accent);
+      text-decoration: none;
+      transition: text-shadow 0.2s ease;
+    }}
+    a:hover {{
+      text-shadow: 0 0 12px rgba(61, 255, 108, 0.6);
+    }}
+    .preview-panel audio {{
+      margin-top: 1rem;
+      border-radius: 12px;
+    }}
+    .button {{
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      padding: 0.9rem 1.8rem;
+      border-radius: 999px;
+      border: 1px solid var(--accent);
+      background: linear-gradient(135deg, rgba(61, 255, 108, 0.9), rgba(61, 255, 108, 0.55));
+      color: #041b0b;
+      cursor: pointer;
+      transition: transform 0.18s ease, box-shadow 0.18s ease;
+      box-shadow: 0 18px 36px rgba(61, 255, 108, 0.25);
+    }}
+    .button:hover {{
+      transform: translateY(-2px);
+      box-shadow: 0 22px 44px rgba(61, 255, 108, 0.32);
+    }}
+    .button:active {{
+      transform: translateY(0);
+      box-shadow: 0 16px 32px rgba(61, 255, 108, 0.24);
+    }}
+    .button-danger {{
+      border-color: var(--danger);
+      background: linear-gradient(135deg, rgba(255, 77, 109, 0.92), rgba(255, 77, 109, 0.6));
+      color: #fff;
+      box-shadow: 0 18px 36px var(--danger-soft);
+    }}
+    .button-secondary {{
+      border-color: var(--accent);
+      background: rgba(6, 28, 16, 0.7);
+      color: var(--text);
+      box-shadow: 0 18px 36px rgba(61, 255, 108, 0.12);
+    }}
+    .button-secondary:hover {{
+      box-shadow: 0 22px 44px rgba(61, 255, 108, 0.18);
+    }}
+    .toolbar {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+      justify-content: space-between;
+      align-items: center;
+    }}
+    .toolbar form {{ margin: 0; }}
+    .toolbar a.button {{ text-decoration: none; }}
   </style>
 </head>
 <body>
-  <h1>Job {job_id}</h1>
-  <div class='panel'>
-    <p><strong>Status:</strong> {status}</p>
-    <p><strong>Created:</strong> {created}</p>
-    <p><strong>Updated:</strong> {updated}</p>
-    <p><strong>Source audio:</strong> {audio_name}</p>
-    {error_block}
-  </div>
-  {preview_block}
-  <div class='panel'>
-    <h2>Outputs</h2>
-    {file_list}
-    {log_link}
-  </div>
-  <form action=\"{delete_action}\" method=\"post\" class=\"delete-form\" onsubmit=\"return confirm('Delete this job and all associated files?');\">
-    <button type=\"submit\" class=\"delete-button\">Delete job</button>
-  </form>
-  <p><a href=\"/\">Back to dashboard</a></p>
+  <main>
+    <header>
+      <h1>Job {job_id}</h1>
+      <span class="meta">Started {created}</span>
+    </header>
+    <section class="panel">
+      <div class="status-grid">
+        <div class="status-item">
+          <span class="status-label">Current status</span>
+          <span class="status-chip">{status}</span>
+        </div>
+        <div class="status-item">
+          <span class="status-label">Updated</span>
+          <span class="status-value">{updated}</span>
+        </div>
+        <div class="status-item">
+          <span class="status-label">Source audio</span>
+          <span class="status-value">{audio_name}</span>
+        </div>
+      </div>
+      {error_block}
+    </section>
+    {preview_block}
+    <section class="panel">
+      <h2>Outputs</h2>
+      {file_list}
+      {log_link}
+    </section>
+    <div class="toolbar">
+      <a class="button button-secondary" href="/">Back to dashboard</a>
+      <form action="{delete_action}" method="post" onsubmit="return confirm('Delete this job and all associated files?');">
+        <button class="button button-danger" type="submit">Delete job</button>
+      </form>
+    </div>
+  </main>
 </body>
 </html>
 """
@@ -473,6 +988,9 @@ def create_app(base_dir: Optional[Path] = None) -> FastAPI:
         num_speakers: str = Form(""),
         asr_device: str = Form(""),
         asr_compute_type: str = Form(""),
+        precise_model: str = Form(""),
+        precise_device: str = Form(""),
+        precise_compute_type: str = Form(""),
         vocal_extract: str = Form(""),
         resume: Optional[str] = Form(None),
         precise_rerun: Optional[str] = Form(None),
@@ -565,6 +1083,9 @@ def create_app(base_dir: Optional[Path] = None) -> FastAPI:
             asr_model=asr_model or None,
             asr_device=asr_device or None,
             asr_compute_type=asr_compute_type or None,
+            precise_model=precise_model or None,
+            precise_device=precise_device or None,
+            precise_compute_type=precise_compute_type or None,
             precise_rerun=_checkbox_to_bool(precise_rerun),
             vocal_extract=vocal_choice,
             log_level=log_level,

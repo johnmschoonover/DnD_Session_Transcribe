@@ -116,6 +116,12 @@ Each run writes artifacts prefixed by the audio stem inside the resolved output 
 
 Intermediate JSON checkpoints (e.g., `*_fw_segments_scrubbed.json`) are also saved when applicable, enabling resume and debugging workflows.
 
+## Testing
+
+Refer to [docs/testing.md](docs/testing.md) for the current pytest status. In short, a clean environment hits an import error for
+`fastapi.testclient` because FastAPI is not installed by default; installing `fastapi[standard]` or adding `fastapi>=0.109,<1`
+to your development requirements resolves the missing module so the web integration tests can run.
+
 ## Troubleshooting
 - **Missing Hugging Face access** – If the script stops with `[HF] Missing HUGGINGFACE_TOKEN`, generate or renew a token on Hugging Face, grant it access to the pyannote models, and export it before retrying.
 - **Diarization failures** – Poor audio quality or aggressive preprocessing can yield empty diarization tracks. Try disabling vocal extraction, supplying `--num-speakers`, or verifying the token has pyannote access.
