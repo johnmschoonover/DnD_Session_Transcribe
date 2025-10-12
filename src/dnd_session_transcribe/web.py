@@ -11,6 +11,7 @@ import os
 import re
 import secrets
 import shutil
+from functools import lru_cache
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable, Optional
@@ -115,6 +116,37 @@ def _checkbox_to_bool(value: Optional[str]) -> bool:
     if value is None:
         return False
     return value.lower() not in {"0", "false", "off"}
+
+
+@lru_cache(maxsize=1)
+def _cuda_available() -> bool:
+    try:
+        import torch
+
+        try:
+            return bool(torch.cuda.is_available())
+        except Exception:  # pragma: no cover - defensive logging only
+            LOGGER.debug("torch.cuda.is_available() raised an exception", exc_info=True)
+            return False
+    except Exception:  # ImportError, RuntimeError, etc.
+        return False
+
+
+def _normalize_device_choice(value: str) -> Optional[str]:
+    selection = value.strip()
+    if not selection:
+        return None
+
+    normalized = selection.lower()
+    if normalized == "cuda":
+        if not _cuda_available():
+            LOGGER.warning(
+                "CUDA device requested by web UI but CUDA runtime is unavailable; defaulting to auto"
+            )
+            return None
+        return "cuda"
+
+    return selection
 
 
 def _build_home_html(jobs: Iterable[dict[str, Any]], message: str | None = None) -> str:
@@ -1075,16 +1107,19 @@ def create_app(base_dir: Optional[Path] = None) -> FastAPI:
         if vocal_choice not in {None, "off", "bandpass"}:
             raise HTTPException(status_code=400, detail="Invalid vocal_extract value")
 
+        resolved_asr_device = _normalize_device_choice(asr_device)
+        resolved_precise_device = _normalize_device_choice(precise_device)
+
         args = build_cli_args(
             audio_path,
             outdir=outputs_dir,
             resume=_checkbox_to_bool(resume),
             num_speakers=parsed_num_speakers,
             asr_model=asr_model or None,
-            asr_device=asr_device or None,
+            asr_device=resolved_asr_device,
             asr_compute_type=asr_compute_type or None,
             precise_model=precise_model or None,
-            precise_device=precise_device or None,
+            precise_device=resolved_precise_device,
             precise_compute_type=precise_compute_type or None,
             precise_rerun=_checkbox_to_bool(precise_rerun),
             vocal_extract=vocal_choice,
