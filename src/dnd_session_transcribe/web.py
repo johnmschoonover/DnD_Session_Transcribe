@@ -258,10 +258,17 @@ def _build_job_html(
 
     file_rows = []
     for label, url in files:
-        file_rows.append(f"<li><a href=\"{url}\">{html.escape(label)}</a></li>")
+        file_rows.append(
+            f"<li><a href=\"{html.escape(url)}\">{html.escape(label)}</a></li>"
+        )
 
     file_list = "<ul>" + "".join(file_rows) + "</ul>" if file_rows else "<p>No output files yet.</p>"
-    log_link = "<p><a href=\"log\">Download job log</a></p>" if log_available else ""
+    log_href = f"/runs/{quote(job_id_text, safe='')}/log"
+    log_link = (
+        f"<p><a href=\"{html.escape(log_href)}\">Download job log</a></p>"
+        if log_available
+        else ""
+    )
 
     error_block = f"<div class='error'>Error: {error}</div>" if error else ""
 
@@ -377,6 +384,9 @@ def create_app(base_dir: Optional[Path] = None) -> FastAPI:
     ) -> tuple[list[tuple[str, str]], str | None]:
         outputs: list[tuple[str, str]] = []
         preview_link: str | None = None
+        raw_job_id = str(status.get("job_id") or job_dir.name)
+        quoted_job_id = quote(raw_job_id, safe="")
+
         output_dir = status.get("output_dir")
         if output_dir:
             out_path = Path(output_dir)
@@ -386,7 +396,8 @@ def create_app(base_dir: Optional[Path] = None) -> FastAPI:
             for child in sorted(out_path.glob("*")):
                 if child.is_file():
                     rel = child.relative_to(job_dir)
-                    url = f"files/{rel.as_posix()}"
+                    rel_url = quote(rel.as_posix(), safe="/")
+                    url = f"/runs/{quoted_job_id}/files/{rel_url}"
                     outputs.append((child.name, url))
                     if preview_link is None and child.name.endswith("_preview.wav"):
                         preview_link = url

@@ -63,6 +63,9 @@ def test_show_job_lists_outputs_from_reported_directory(tmp_path: Path) -> None:
 
     preview_file = output_dir / "example_preview.wav"
     preview_file.write_bytes(b"not real audio")
+    text_file = output_dir / "notes final.txt"
+    text_file.write_text("hello", encoding="utf-8")
+    (job_dir / "job.log").write_text("log entry", encoding="utf-8")
 
     status = {
         "job_id": job_id,
@@ -89,6 +92,10 @@ def test_show_job_lists_outputs_from_reported_directory(tmp_path: Path) -> None:
 
     assert "example_preview.wav" in html
     assert "Preview snippet" in html
+    assert 'href="/runs/job-123/files/preview_outputs/example_preview.wav"' in html
+    assert 'href="/runs/job-123/files/preview_outputs/notes%20final.txt"' in html
+    assert 'href="/runs/job-123/log"' in html
+    assert 'audio controls src="/runs/job-123/files/preview_outputs/example_preview.wav"' in html
 
 
 def test_delete_job_removes_directory(tmp_path: Path) -> None:
