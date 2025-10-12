@@ -437,7 +437,14 @@ def create_app(base_dir: Optional[Path] = None) -> FastAPI:
             )
             status["status"] = "completed"
             if resolved_outdir is not None:
-                status["output_dir"] = str(resolved_outdir)
+                resolved_outdir_str = str(resolved_outdir)
+                status["output_dir"] = resolved_outdir_str
+
+                metadata_path = job_dir / "metadata.json"
+                metadata = _read_json(metadata_path)
+                if metadata.get("output_dir") != resolved_outdir_str:
+                    metadata["output_dir"] = resolved_outdir_str
+                    _write_json(metadata_path, metadata)
             status["updated_at"] = _utc_now()
             _write_json(job_dir / "status.json", status)
         except BaseException as exc:  # pylint: disable=broad-except
