@@ -107,6 +107,16 @@ Key behaviors:
 - Each job records its log to `job.log`; the Web UI links to it alongside the output files for quick download.
 - The FastAPI app can also be served manually: `uvicorn dnd_session_transcribe.web:app --host 0.0.0.0 --port 8000`.
 
+Need a quick static snapshot of the landing page for documentation or review? Run the helper script to export the HTML used by the live app:
+
+```bash
+python scripts/generate_webui_preview.py
+# or choose a custom path
+python scripts/generate_webui_preview.py --output docs/previews/my_preview.html
+```
+
+The script relies on the FastAPI `TestClient`, so make sure the project dependencies are installed first (e.g., `pip install -e .`). The exported file is self-contained, making it easy to attach to issues or share with reviewers.
+
 ## Outputs
 Each run writes artifacts prefixed by the audio stem inside the resolved output directory:
 - `<name>.srt` – Subtitle file with speaker tags and timestamps for video players.
