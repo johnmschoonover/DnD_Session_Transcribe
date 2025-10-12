@@ -133,7 +133,7 @@ def _build_home_html(jobs: Iterable[dict[str, Any]], message: str | None = None)
         error = html.escape(job.get("error", "") or "")
         rows.append(
             "<tr>"
-            f"<td><a href=\"{job_href}\">{job_id}</a></td>"
+            f"<td><a href=\"{job_href}\" target=\"_blank\" rel=\"noopener noreferrer\">{job_id}</a></td>"
             f"<td>{status}</td><td>{created}</td><td>{updated}</td><td>{error}</td>"
             f"<td><form action=\"{delete_action}\" method=\"post\" class=\"inline-form\" "
             "onsubmit=\"return confirm('Delete this job and all associated files?');\">"
@@ -446,7 +446,6 @@ def create_app(base_dir: Optional[Path] = None) -> FastAPI:
             status["updated_at"] = _utc_now()
             _write_json(job_dir / "status.json", status)
             LOGGER.exception("Job %s failed", job_id)
-            raise
         finally:
             cli.ASR.hotwords_file = original_settings["ASR"]["hotwords_file"]
             cli.ASR.initial_prompt_file = original_settings["ASR"]["initial_prompt_file"]
@@ -573,15 +572,25 @@ def create_app(base_dir: Optional[Path] = None) -> FastAPI:
             preview_duration=preview_duration_arg,
         )
 
-        loop = asyncio.get_running_loop()
-        try:
-            await loop.run_in_executor(None, _run_job, args, job_id, job_dir, created_at)
-        except SystemExit:
-            return RedirectResponse(url=f"/runs/{job_id}", status_code=303)
-        except Exception:
-            return RedirectResponse(url=f"/runs/{job_id}", status_code=303)
+        status_snapshot = _job_status_template(job_id, created_at)
+        status_snapshot["audio_filename"] = audio_file.filename
+        _write_json(job_dir / "status.json", status_snapshot)
 
-        return RedirectResponse(url=f"/runs/{job_id}", status_code=303)
+        loop = asyncio.get_running_loop()
+
+        def _consume_future(fut: asyncio.Future[Any]) -> None:
+            try:
+                fut.result()
+            except SystemExit:
+                LOGGER.info("Job %s exited early", job_id)
+            except Exception:  # pylint: disable=broad-except
+                LOGGER.exception("Job %s raised an exception during execution", job_id)
+
+        future = loop.run_in_executor(None, _run_job, args, job_id, job_dir, created_at)
+        future.add_done_callback(_consume_future)
+
+        message = quote_plus(f"Started job {job_id}")
+        return RedirectResponse(url=f"/?message={message}", status_code=303)
 
     @app.get("/runs/{job_id}", response_class=HTMLResponse)
     async def show_job(job_id: str) -> str:

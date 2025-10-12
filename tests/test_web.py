@@ -1,6 +1,9 @@
 import asyncio
 import json
+import time
 from pathlib import Path
+
+from fastapi.testclient import TestClient
 
 from dnd_session_transcribe import web
 
@@ -96,6 +99,59 @@ def test_show_job_lists_outputs_from_reported_directory(tmp_path: Path) -> None:
     assert 'href="/runs/job-123/files/preview_outputs/notes%20final.txt"' in html
     assert 'href="/runs/job-123/log"' in html
     assert 'audio controls src="/runs/job-123/files/preview_outputs/example_preview.wav"' in html
+
+
+def test_transcribe_redirects_home_and_lists_job(
+    tmp_path: Path, monkeypatch
+) -> None:
+    app = web.create_app(tmp_path)
+
+    def fake_run_transcription(args, configure_logging=False, log_handlers=None):  # type: ignore[override]
+        outdir = Path(args.outdir)
+        outdir.mkdir(parents=True, exist_ok=True)
+        (outdir / "result.txt").write_text("done", encoding="utf-8")
+        return outdir
+
+    monkeypatch.setattr(web.cli, "run_transcription", fake_run_transcription)
+
+    with TestClient(app, follow_redirects=False) as client:
+        response = client.post(
+            "/transcribe",
+            data={
+                "log_level": web.cli.LOG.level,
+                "preview_start": "",
+                "preview_duration": "",
+            },
+            files={"audio_file": ("session.wav", b"fake-bytes", "audio/wav")},
+        )
+
+        assert response.status_code == 303
+        assert response.headers["location"].startswith("/?message=Started+job+")
+
+        job_dirs = [p for p in tmp_path.iterdir() if p.is_dir()]
+        assert job_dirs, "expected job directory to be created"
+        job_dir = job_dirs[0]
+        status_path = job_dir / "status.json"
+        assert status_path.exists()
+
+        status = None
+        for _ in range(10):
+            content = status_path.read_text(encoding="utf-8")
+            if content.strip():
+                status = json.loads(content)
+                break
+            time.sleep(0.05)
+
+        assert status is not None, "status.json remained empty"
+        assert status["job_id"] == job_dir.name
+        assert status["status"] in {"running", "completed"}
+
+        dashboard_html = client.get("/").text
+        link_snippet = (
+            f'<a href="/runs/{job_dir.name}" target="_blank" rel="noopener noreferrer">'
+        )
+        assert link_snippet in dashboard_html
+        assert job_dir.name in dashboard_html
 
 
 def test_delete_job_removes_directory(tmp_path: Path) -> None:
