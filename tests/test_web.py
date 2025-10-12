@@ -121,9 +121,9 @@ def test_transcribe_redirects_home_and_lists_job(
         response = client.post(
             "/transcribe",
             data={
-                "log_level": web.cli.LOG.level,
-                "preview_start": "",
-                "preview_duration": "",
+                "job-0-log_level": web.cli.LOG.level,
+                "job-0-preview_start": "",
+                "job-0-preview_duration": "",
             },
             files={"audio_file": ("session.wav", b"fake-bytes", "audio/wav")},
         )
@@ -159,6 +159,10 @@ def test_transcribe_redirects_home_and_lists_job(
         assert settings["log_level"] == web.cli.LOG.level
         assert settings["resume"] is False
         assert settings["preview_requested"] is False
+        assert settings["batch_index"] == 0
+        assert settings["job_index"] == "0"
+        assert metadata["batch_index"] == 0
+        assert metadata["job_index"] == "0"
 
         dashboard_html = client.get("/").text
         link_snippet = (
@@ -187,10 +191,10 @@ def test_transcribe_preview_updates_output_directory(
         response = client.post(
             "/transcribe",
             data={
-                "log_level": web.cli.LOG.level,
-                "preview_enabled": "1",
-                "preview_start": "2",
-                "preview_duration": "5",
+                "job-0-log_level": web.cli.LOG.level,
+                "job-0-preview_enabled": "1",
+                "job-0-preview_start": "2",
+                "job-0-preview_duration": "5",
             },
             files={"audio_file": ("session.wav", b"fake-bytes", "audio/wav")},
         )
@@ -221,6 +225,92 @@ def test_transcribe_preview_updates_output_directory(
         assert f"/runs/{job_dir.name}/files/preview_outputs/session_preview.wav" in job_page
 
 
+def test_transcribe_schedules_multiple_jobs(tmp_path: Path, monkeypatch) -> None:
+    app = web.create_app(tmp_path)
+
+    recorded_args: list[object] = []
+
+    def fake_run_transcription(args, configure_logging=False, log_handlers=None):  # type: ignore[override]
+        recorded_args.append(args)
+        outdir = Path(args.outdir)
+        outdir.mkdir(parents=True, exist_ok=True)
+        (outdir / "result.txt").write_text("done", encoding="utf-8")
+        return outdir
+
+    monkeypatch.setattr(web.cli, "run_transcription", fake_run_transcription)
+
+    alternate_log_level = next(
+        (level for level in web.cli.LOG_LEVELS if level != web.cli.LOG.level),
+        web.cli.LOG.level,
+    )
+
+    with TestClient(app, follow_redirects=False) as client:
+        response = client.post(
+            "/transcribe",
+            data={
+                "job-0-log_level": web.cli.LOG.level,
+                "job-0-asr_model": "tiny",
+                "job-1-log_level": alternate_log_level,
+                "job-1-num_speakers": "3",
+                "job-1-vocal_extract": "bandpass",
+                "job-1-precise_rerun": "true",
+                "job-1-preview_enabled": "true",
+                "job-1-preview_start": "1:30",
+                "job-1-preview_duration": "8",
+            },
+            files={"audio_file": ("session.wav", b"fake-bytes", "audio/wav")},
+        )
+
+        assert response.status_code == 303
+        assert "Started+jobs+" in response.headers["location"]
+
+        job_dirs = [p for p in tmp_path.iterdir() if p.is_dir()]
+        assert len(job_dirs) == 2
+
+        metadata_by_batch: dict[int, dict[str, object]] = {}
+        for job_dir in job_dirs:
+            inputs = list((job_dir / "inputs").iterdir())
+            assert inputs and inputs[0].name == "session.wav"
+
+            status_path = job_dir / "status.json"
+            for _ in range(50):
+                raw = status_path.read_text(encoding="utf-8")
+                if raw.strip():
+                    parsed = json.loads(raw)
+                    if parsed.get("status") == "completed":
+                        break
+                time.sleep(0.05)
+
+            metadata_path = job_dir / "metadata.json"
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            metadata_by_batch[int(metadata["batch_index"])] = metadata
+
+        assert 0 in metadata_by_batch and 1 in metadata_by_batch
+
+        first_job = metadata_by_batch[0]
+        assert first_job["settings"]["asr_model"] == "tiny"
+        assert first_job["settings"]["preview_requested"] is False
+        assert first_job["settings"]["batch_index"] == 0
+        assert first_job["settings"]["job_index"] == "0"
+
+        second_job = metadata_by_batch[1]
+        assert second_job["settings"]["log_level"] == alternate_log_level
+        assert second_job["settings"]["num_speakers"] == 3
+        assert second_job["settings"]["vocal_extract"] == "bandpass"
+        assert second_job["settings"]["precise_rerun"] is True
+        assert second_job["preview"]["requested"] is True
+        assert second_job["preview"]["duration"] == 8.0
+        assert second_job["settings"]["batch_index"] == 1
+        assert second_job["settings"]["job_index"] == "1"
+
+    assert len(recorded_args) == 2
+    assert any(getattr(args, "log_level", None) == web.cli.LOG.level for args in recorded_args)
+    assert any(
+        getattr(args, "log_level", None) == alternate_log_level
+        and getattr(args, "precise_rerun", None) is True
+        and getattr(args, "num_speakers", None) == 3
+        for args in recorded_args
+    )
 def test_delete_job_removes_directory(tmp_path: Path) -> None:
     app = web.create_app(tmp_path)
     job_id = "job-delete"
