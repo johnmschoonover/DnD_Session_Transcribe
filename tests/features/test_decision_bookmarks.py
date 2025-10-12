@@ -46,4 +46,3 @@ def test_promoting_unknown_bookmark_raises_error():
     workflow = DecisionBookmarkingWorkflow()
     with pytest.raises(KeyError):
         workflow.promote_to_task("missing")
-

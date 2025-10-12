@@ -48,4 +48,3 @@ def test_mark_attempt_raises_for_unknown_segment():
     queue = RetranscriptionQueue()
     with pytest.raises(KeyError):
         queue.mark_attempt(1.0, 2.0)
-
