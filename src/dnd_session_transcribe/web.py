@@ -393,10 +393,15 @@ def create_app(base_dir: Optional[Path] = None) -> FastAPI:
             },
         }
 
+        resolved_outdir: Path | None = None
+
         try:
-            cli.run_transcription(args, configure_logging=False, log_handlers=[handler])
+            resolved_outdir = cli.run_transcription(
+                args, configure_logging=False, log_handlers=[handler]
+            )
             status["status"] = "completed"
-            status["output_dir"] = args.outdir
+            if resolved_outdir is not None:
+                status["output_dir"] = str(resolved_outdir)
             status["updated_at"] = _utc_now()
             _write_json(job_dir / "status.json", status)
         except BaseException as exc:  # pylint: disable=broad-except
