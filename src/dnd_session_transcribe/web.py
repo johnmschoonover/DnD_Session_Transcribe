@@ -6,16 +6,18 @@ import argparse
 import asyncio
 import functools
 import html
+import itertools
 import json
 import logging
 import os
+import random
 import re
 import secrets
 import shutil
 import tempfile
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterable, Optional
+from typing import Any, Iterable, Optional, Sequence
 from urllib.parse import quote, quote_plus
 
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
@@ -158,6 +160,37 @@ _COMPUTE_TYPE_SUGGESTIONS = [
 ]
 
 
+_CHOICE_RANDOM = "random"
+_CHOICE_ALL = "all"
+
+_DEVICE_OPTIONS = [
+    ("", "Config default"),
+    ("cpu", "cpu"),
+    ("cuda", "cuda"),
+    ("mps", "mps"),
+]
+_DEVICE_VALUES = [value for value, _ in _DEVICE_OPTIONS]
+
+_VOCAL_OPTIONS = [
+    ("", "Config default"),
+    ("off", "Off"),
+    ("bandpass", "Band-pass filter"),
+]
+_VOCAL_VALUES = [value for value, _ in _VOCAL_OPTIONS]
+
+
+def _resolve_selection(value: str, allowed: Sequence[str]) -> tuple[str, list[str]]:
+    """Resolve a dropdown selection to a selection mode and available choices."""
+
+    if value == _CHOICE_ALL:
+        return "all", list(allowed)
+    if value == _CHOICE_RANDOM:
+        return "random", list(allowed)
+    if value in allowed:
+        return "single", [value]
+    raise ValueError(f"Invalid selection: {value}")
+
+
 def _checkbox_to_bool(value: Optional[str]) -> bool:
     if value is None:
         return False
@@ -178,6 +211,10 @@ def _job_config_block(index: str, *, removable: bool) -> str:
         )
         for level in cli.LOG_LEVELS
     )
+    log_level_options += (
+        f"<option value=\"{_CHOICE_RANDOM}\">Random</option>"
+        f"<option value=\"{_CHOICE_ALL}\">All</option>"
+    )
 
     device_options = "".join(
         (
@@ -187,26 +224,26 @@ def _job_config_block(index: str, *, removable: bool) -> str:
                 selected=" selected" if value == "" else "",
             )
         )
-        for value, label in (
-            ("", "Config default"),
-            ("cpu", "cpu"),
-            ("cuda", "cuda"),
-            ("mps", "mps"),
-        )
+        for value, label in _DEVICE_OPTIONS
+    )
+    device_options += (
+        f"<option value=\"{_CHOICE_RANDOM}\">Random</option>"
+        f"<option value=\"{_CHOICE_ALL}\">All</option>"
     )
 
     vocal_options = "".join(
         (
-            "<option value='{value}'>{label}</option>".format(
+            "<option value='{value}'{selected}>{label}</option>".format(
                 value=html.escape(value),
                 label=html.escape(label),
+                selected=" selected" if value == "" else "",
             )
         )
-        for value, label in (
-            ("", "Config default"),
-            ("off", "Off"),
-            ("bandpass", "Band-pass filter"),
-        )
+        for value, label in _VOCAL_OPTIONS
+    )
+    vocal_options += (
+        f"<option value=\"{_CHOICE_RANDOM}\">Random</option>"
+        f"<option value=\"{_CHOICE_ALL}\">All</option>"
     )
 
     remove_button = (
@@ -269,12 +306,18 @@ def _job_config_block(index: str, *, removable: bool) -> str:
         + "<h4>Preview Builder</h4>"
         + f"<label class=\"checkbox-inline\"><input type=\"checkbox\" id=\"{prefix}preview_enabled\" name=\"{prefix}preview_enabled\" value=\"true\" checked /> Generate 10s teaser</label>"
         + "<div class=\"preview-grid\">"
+        + "<div class=\"preview-field\">"
         + f"<label for=\"{prefix}preview_start\">Start</label>"
         + f"<input id=\"{prefix}preview_start\" name=\"{prefix}preview_start\" type=\"text\" placeholder=\"0 or MM:SS\" />"
+        + "</div>"
+        + "<div class=\"preview-field\">"
         + f"<label for=\"{prefix}preview_duration\">Duration</label>"
         + f"<input id=\"{prefix}preview_duration\" name=\"{prefix}preview_duration\" type=\"text\" placeholder=\"10\" />"
+        + "</div>"
+        + "<div class=\"preview-field full\">"
         + f"<label for=\"{prefix}preview_output\">Custom WAV name</label>"
         + f"<input id=\"{prefix}preview_output\" name=\"{prefix}preview_output\" type=\"text\" placeholder=\"leave blank for default\" />"
+        + "</div>"
         + "</div>"
         + "</section>"
         + "</div>"
@@ -341,12 +384,17 @@ def _build_home_html(jobs: Iterable[dict[str, Any]], message: str | None = None)
 
     body {{
       margin: 0;
-      padding: 3rem;
+      padding: clamp(1.5rem, 3vw + 1rem, 3.5rem);
       background: radial-gradient(circle at top left, rgba(57,255,20,0.08), transparent 45%),
                   radial-gradient(circle at bottom right, rgba(0,180,255,0.08), transparent 40%),
                   var(--bg);
       color: var(--text);
       min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 2rem;
+      box-sizing: border-box;
     }}
 
     h1 {{
@@ -355,6 +403,7 @@ def _build_home_html(jobs: Iterable[dict[str, Any]], message: str | None = None)
       text-transform: uppercase;
       margin-bottom: 2rem;
       text-shadow: 0 0 18px rgba(57,255,20,0.7), 0 0 32px rgba(0, 255, 255, 0.35);
+      text-align: center;
     }}
 
     h2 {{
@@ -363,6 +412,7 @@ def _build_home_html(jobs: Iterable[dict[str, Any]], message: str | None = None)
       letter-spacing: 0.18em;
       font-size: 1.1rem;
       color: var(--muted);
+      text-align: center;
     }}
 
     form {{
@@ -372,6 +422,8 @@ def _build_home_html(jobs: Iterable[dict[str, Any]], message: str | None = None)
       border-radius: 18px;
       padding: 2rem;
       backdrop-filter: blur(12px);
+      width: min(100%, 1100px);
+      margin: 0 auto;
     }}
 
     fieldset {{
@@ -451,7 +503,7 @@ def _build_home_html(jobs: Iterable[dict[str, Any]], message: str | None = None)
 
     .config-grid {{
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
       gap: 1.25rem;
     }}
 
@@ -525,9 +577,19 @@ def _build_home_html(jobs: Iterable[dict[str, Any]], message: str | None = None)
 
     .preview-grid {{
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-      gap: 0.75rem;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 1rem;
       margin-top: 0.75rem;
+    }}
+
+    .preview-field {{
+      display: flex;
+      flex-direction: column;
+      gap: 0.4rem;
+    }}
+
+    .preview-field.full {{
+      grid-column: 1 / -1;
     }}
 
     .neon-button {{
@@ -561,8 +623,8 @@ def _build_home_html(jobs: Iterable[dict[str, Any]], message: str | None = None)
     }}
 
     table {{
-      width: 100%;
-      margin-top: 1rem;
+      width: min(100%, 1100px);
+      margin: 1rem auto 0;
       border-collapse: collapse;
       border: 1px solid var(--border);
       background: rgba(3, 12, 14, 0.78);
@@ -603,7 +665,8 @@ def _build_home_html(jobs: Iterable[dict[str, Any]], message: str | None = None)
     }}
 
     .message {{
-      margin-bottom: 1.5rem;
+      margin: 0 auto 1.5rem;
+      width: min(100%, 1100px);
       padding: 0.85rem 1.2rem;
       border-radius: 999px;
       border: 1px solid rgba(0,255,255,0.45);
@@ -615,9 +678,6 @@ def _build_home_html(jobs: Iterable[dict[str, Any]], message: str | None = None)
     }}
 
     @media (max-width: 960px) {{
-      body {{
-        padding: 2rem;
-      }}
       form {{
         padding: 1.5rem;
       }}
@@ -683,15 +743,68 @@ def _build_home_html(jobs: Iterable[dict[str, Any]], message: str | None = None)
         }});
       }}
 
-      addButton.addEventListener('click', () => {{
-        const markup = template.innerHTML.replace(/__INDEX__/g, String(nextIndex));
+      function createBlock(index) {{
+        const markup = template.innerHTML.replace(/__INDEX__/g, String(index));
         const wrapper = document.createElement('div');
         wrapper.innerHTML = markup.trim();
-        const newBlock = wrapper.firstElementChild;
+        return wrapper.firstElementChild;
+      }}
+
+      function copyValues(source, target) {{
+        if (!source || !target) {{
+          return;
+        }}
+        const fieldMap = new Map();
+        target.querySelectorAll('input, select, textarea').forEach((element) => {{
+          const name = element.getAttribute('name');
+          if (!name) {{
+            return;
+          }}
+          const segments = name.includes('-') ? name.split('-').slice(2) : [name];
+          fieldMap.set(segments.join('-'), element);
+        }});
+
+        source.querySelectorAll('input, select, textarea').forEach((element) => {{
+          const name = element.getAttribute('name');
+          if (!name) {{
+            return;
+          }}
+          const segments = name.includes('-') ? name.split('-').slice(2) : [name];
+          const key = segments.join('-');
+          const destination = fieldMap.get(key);
+          if (!destination) {{
+            return;
+          }}
+          if (element instanceof HTMLInputElement && element.type === 'file') {{
+            return;
+          }}
+          if (element instanceof HTMLInputElement && element.type === 'checkbox') {{
+            if (destination instanceof HTMLInputElement) {{
+              destination.checked = element.checked;
+            }}
+            return;
+          }}
+          if (destination instanceof HTMLInputElement && destination.type === 'checkbox') {{
+            destination.checked = false;
+            return;
+          }}
+          if ('value' in destination) {{
+            destination.value = element.value;
+          }}
+        }});
+      }}
+
+      addButton.addEventListener('click', () => {{
+        const newBlock = createBlock(nextIndex);
         if (!newBlock) {{
           return;
         }}
+        const blocks = container.querySelectorAll('.job-config');
+        const source = blocks.length ? blocks[blocks.length - 1] : null;
         container.appendChild(newBlock);
+        if (source) {{
+          copyValues(source, newBlock);
+        }}
         nextIndex += 1;
         renumber();
       }});
@@ -1200,22 +1313,59 @@ def create_app(base_dir: Optional[Path] = None) -> FastAPI:
             return _checkbox_to_bool(str(raw))
 
         try:
+            rng = random.Random(secrets.randbits(64))
             job_plans: list[dict[str, Any]] = []
+            skipped_jobs: list[dict[str, Any]] = []
+            seen_signatures: set[tuple[Any, ...]] = set()
+            batch_counter = 0
+
+            def _signature(base: dict[str, Any], selections: dict[str, str]) -> tuple[tuple[str, Any], ...]:
+                return (
+                    ("log_level", selections["log_level"]),
+                    ("num_speakers", base["num_speakers"]),
+                    ("ram", base["ram"]),
+                    ("resume", base["resume"]),
+                    ("precise_rerun", base["precise_rerun"]),
+                    ("asr_model", base["asr_model"]),
+                    ("asr_device", selections["asr_device"] or None),
+                    ("asr_compute_type", base["asr_compute_type"]),
+                    ("precise_model", base["precise_model"]),
+                    ("precise_device", selections["precise_device"] or None),
+                    ("precise_compute_type", base["precise_compute_type"]),
+                    ("vocal_extract", selections["vocal_extract"] or None),
+                    ("hotwords_text", base["hotwords_text"]),
+                    ("initial_prompt_text", base["initial_prompt_text"]),
+                    ("spelling_map_text", base["spelling_map_text"]),
+                    ("preview_requested", base["preview_requested"]),
+                    (
+                        "preview_start",
+                        base["preview_start"] if base["preview_requested"] else None,
+                    ),
+                    (
+                        "preview_duration",
+                        base["preview_duration"] if base["preview_requested"] else None,
+                    ),
+                    (
+                        "preview_output_name",
+                        base["preview_output_name"] if base["preview_requested"] else None,
+                    ),
+                )
 
             for order, index in enumerate(job_indices):
-                job_id = _generate_job_id()
-                job_dir = _job_dir(job_id)
-                inputs_dir = job_dir / "inputs"
-                outputs_dir = job_dir / "outputs"
-                audio_target = inputs_dir / clean_name
-
                 def _detail(message: str) -> str:
                     return f"{message} for configuration {order + 1}"
 
-                log_level_value = _get_value(index, "log_level", cli.LOG.level).strip()
-                log_level_value = log_level_value or cli.LOG.level
-                if log_level_value not in cli.LOG_LEVELS:
-                    raise HTTPException(status_code=400, detail=_detail("Invalid log level"))
+                log_level_text = _get_value(index, "log_level", cli.LOG.level).strip()
+                if log_level_text and log_level_text not in {_CHOICE_RANDOM, _CHOICE_ALL}:
+                    log_level_text = log_level_text.upper()
+                log_level_requested = log_level_text or cli.LOG.level
+
+                try:
+                    log_level_mode, log_level_choices = _resolve_selection(
+                        log_level_requested, tuple(cli.LOG_LEVELS.keys())
+                    )
+                except ValueError as exc:
+                    raise HTTPException(status_code=400, detail=_detail("Invalid log level")) from exc
 
                 asr_model_value = _get_value(index, "asr_model").strip()
                 num_speakers_text = _get_value(index, "num_speakers").strip()
@@ -1230,25 +1380,35 @@ def create_app(base_dir: Optional[Path] = None) -> FastAPI:
                 preview_output_text = _get_value(index, "preview_output").strip()
                 vocal_extract_value = _get_value(index, "vocal_extract").strip()
 
+                try:
+                    asr_device_mode, asr_device_choices = _resolve_selection(
+                        asr_device_value, _DEVICE_VALUES
+                    )
+                except ValueError as exc:
+                    raise HTTPException(status_code=400, detail=_detail("Invalid asr_device value")) from exc
+
+                try:
+                    precise_device_mode, precise_device_choices = _resolve_selection(
+                        precise_device_value, _DEVICE_VALUES
+                    )
+                except ValueError as exc:
+                    raise HTTPException(status_code=400, detail=_detail("Invalid precise_device value")) from exc
+
+                try:
+                    vocal_mode, vocal_choices = _resolve_selection(
+                        vocal_extract_value, _VOCAL_VALUES
+                    )
+                except ValueError as exc:
+                    raise HTTPException(status_code=400, detail=_detail("Invalid vocal_extract value")) from exc
+
                 parsed_num_speakers: Optional[int]
                 if num_speakers_text:
                     try:
                         parsed_num_speakers = int(num_speakers_text)
-                    except ValueError:
-                        raise HTTPException(status_code=400, detail=_detail("num_speakers must be an integer")) from None
+                    except ValueError as exc:
+                        raise HTTPException(status_code=400, detail=_detail("num_speakers must be an integer")) from exc
                 else:
                     parsed_num_speakers = None
-
-                vocal_choice = vocal_extract_value or None
-                if vocal_choice not in {None, "off", "bandpass"}:
-                    raise HTTPException(status_code=400, detail=_detail("Invalid vocal_extract value"))
-
-                for device_choice, label in (
-                    (asr_device_value, "asr_device"),
-                    (precise_device_value, "precise_device"),
-                ):
-                    if device_choice and device_choice not in {"cpu", "cuda", "mps"}:
-                        raise HTTPException(status_code=400, detail=_detail(f"Invalid {label} value"))
 
                 ram_enabled = _get_checkbox(index, "ram")
                 resume_enabled = _get_checkbox(index, "resume")
@@ -1270,8 +1430,8 @@ def create_app(base_dir: Optional[Path] = None) -> FastAPI:
                             if preview_start_text
                             else 0.0
                         )
-                    except ValueError:
-                        raise HTTPException(status_code=400, detail=_detail("Invalid preview_start value")) from None
+                    except ValueError as exc:
+                        raise HTTPException(status_code=400, detail=_detail("Invalid preview_start value")) from exc
 
                     try:
                         duration_value = (
@@ -1279,8 +1439,8 @@ def create_app(base_dir: Optional[Path] = None) -> FastAPI:
                             if preview_duration_text
                             else 10.0
                         )
-                    except ValueError:
-                        raise HTTPException(status_code=400, detail=_detail("Invalid preview_duration value")) from None
+                    except ValueError as exc:
+                        raise HTTPException(status_code=400, detail=_detail("Invalid preview_duration value")) from exc
 
                     if duration_value <= 0:
                         raise HTTPException(status_code=400, detail=_detail("Preview duration must be positive"))
@@ -1292,90 +1452,245 @@ def create_app(base_dir: Optional[Path] = None) -> FastAPI:
                     preview_start_arg = None
                     preview_duration_arg = None
 
-                file_payloads: list[tuple[Path, str]] = []
-                hotwords_path: Optional[Path] = None
-                if hotwords_text:
-                    hotwords_path = inputs_dir / "hotwords.txt"
-                    file_payloads.append((hotwords_path, hotwords_text))
-
-                initial_prompt_path: Optional[Path] = None
-                if initial_prompt_text:
-                    initial_prompt_path = inputs_dir / "initial_prompt.txt"
-                    file_payloads.append((initial_prompt_path, initial_prompt_text))
-
-                spelling_map_path: Optional[Path] = None
-                if spelling_map_text:
-                    spelling_map_path = inputs_dir / "spelling_map.csv"
-                    file_payloads.append((spelling_map_path, spelling_map_text))
-
-                preview_output_path: Optional[Path] = None
+                preview_output_name: Optional[str] = None
                 if preview_output_text:
-                    sanitized_preview_name = safe_filename(preview_output_text)
-                    if not sanitized_preview_name.lower().endswith(".wav"):
-                        sanitized_preview_name += ".wav"
-                    preview_output_path = outputs_dir / sanitized_preview_name
+                    preview_output_name = safe_filename(preview_output_text)
+                    if not preview_output_name.lower().endswith(".wav"):
+                        preview_output_name += ".wav"
 
-                args = build_cli_args(
-                    audio_target,
-                    outdir=outputs_dir,
-                    ram=ram_enabled,
-                    resume=resume_enabled,
-                    num_speakers=parsed_num_speakers,
-                    hotwords_file=hotwords_path,
-                    initial_prompt_file=initial_prompt_path,
-                    spelling_map=spelling_map_path,
-                    asr_model=asr_model_value or None,
-                    asr_device=asr_device_value or None,
-                    asr_compute_type=asr_compute_type_value or None,
-                    precise_rerun=precise_rerun_enabled,
-                    precise_model=precise_model_value or None,
-                    precise_device=precise_device_value or None,
-                    precise_compute_type=precise_compute_type_value or None,
-                    vocal_extract=vocal_choice,
-                    log_level=log_level_value,
-                    preview_start=preview_start_arg,
-                    preview_duration=preview_duration_arg,
-                    preview_output=preview_output_path,
+                selection_modes = {
+                    "log_level": (log_level_mode, log_level_choices),
+                    "asr_device": (asr_device_mode, asr_device_choices),
+                    "precise_device": (precise_device_mode, precise_device_choices),
+                    "vocal_extract": (vocal_mode, vocal_choices),
+                }
+
+                base_config = {
+                    "order": order,
+                    "index": index,
+                    "num_speakers": parsed_num_speakers,
+                    "ram": ram_enabled,
+                    "resume": resume_enabled,
+                    "precise_rerun": precise_rerun_enabled,
+                    "asr_model": asr_model_value or None,
+                    "asr_compute_type": asr_compute_type_value or None,
+                    "precise_model": precise_model_value or None,
+                    "precise_compute_type": precise_compute_type_value or None,
+                    "hotwords_text": hotwords_text,
+                    "initial_prompt_text": initial_prompt_text,
+                    "spelling_map_text": spelling_map_text,
+                    "preview_requested": preview_requested,
+                    "preview_start": preview_start_arg,
+                    "preview_duration": preview_duration_arg,
+                    "preview_output_name": preview_output_name,
+                    "preview_meta": preview_meta,
+                    "log_level_requested": log_level_requested,
+                    "asr_device_requested": asr_device_value,
+                    "precise_device_requested": precise_device_value,
+                    "vocal_extract_requested": vocal_extract_value,
+                }
+
+                base_values = {
+                    name: choices[0]
+                    for name, (mode, choices) in selection_modes.items()
+                    if mode == "single"
+                }
+                all_field_names = [
+                    name for name, (mode, _) in selection_modes.items() if mode == "all"
+                ]
+                all_combinations = (
+                    list(
+                        itertools.product(
+                            *(selection_modes[name][1] for name in all_field_names)
+                        )
+                    )
+                    if all_field_names
+                    else [()]
                 )
-
-                settings_snapshot = {
-                    key: (str(val) if isinstance(val, Path) else val)
-                    for key, val in vars(args).items()
+                random_fields = {
+                    name: choices
+                    for name, (mode, choices) in selection_modes.items()
+                    if mode == "random"
                 }
-                settings_snapshot["preview_requested"] = preview_requested
-                settings_snapshot["batch_index"] = order
-                settings_snapshot["job_index"] = index
+                random_field_names = list(random_fields)
 
-                created_at = _utc_now()
-                status_snapshot = _job_status_template(job_id, created_at)
-                status_snapshot["audio_filename"] = audio_file.filename
+                for combo in all_combinations:
+                    resolved_values = base_values.copy()
+                    for field_name, chosen in zip(all_field_names, combo):
+                        resolved_values[field_name] = chosen
 
-                metadata = {
-                    "job_id": job_id,
-                    "audio_filename": audio_file.filename,
-                    "created_at": created_at,
-                    "preview": preview_meta,
-                    "settings": settings_snapshot,
-                    "batch_index": order,
-                    "job_index": index,
-                }
+                    random_combos = [()]
+                    if random_field_names:
+                        random_combos = list(
+                            itertools.product(
+                                *(random_fields[name] for name in random_field_names)
+                            )
+                        )
+                        rng.shuffle(random_combos)
 
-                job_plans.append(
-                    {
+                    assigned = False
+                    attempted_candidate: dict[str, str] | None = None
+                    for random_choice in random_combos:
+                        candidate_values = resolved_values.copy()
+                        for field_name, chosen in zip(random_field_names, random_choice):
+                            candidate_values[field_name] = chosen
+                        signature = _signature(base_config, candidate_values)
+                        if signature not in seen_signatures:
+                            seen_signatures.add(signature)
+                            assigned = True
+                            final_values = candidate_values
+                            break
+                        attempted_candidate = candidate_values
+
+                    if not assigned:
+                        reason = "Skipped duplicate configuration"
+                        if random_field_names:
+                            reason = "Skipped duplicate configuration (random exhausted)"
+                        skip_settings = {
+                            "log_level": base_config["log_level_requested"],
+                            "num_speakers": base_config["num_speakers"],
+                            "ram": base_config["ram"],
+                            "resume": base_config["resume"],
+                            "precise_rerun": base_config["precise_rerun"],
+                            "asr_model": base_config["asr_model"],
+                            "asr_device": base_config["asr_device_requested"],
+                            "asr_compute_type": base_config["asr_compute_type"],
+                            "precise_model": base_config["precise_model"],
+                            "precise_device": base_config["precise_device_requested"],
+                            "precise_compute_type": base_config["precise_compute_type"],
+                            "vocal_extract": base_config["vocal_extract_requested"],
+                            "preview_requested": base_config["preview_requested"],
+                            "preview_start": base_config["preview_start"],
+                            "preview_duration": base_config["preview_duration"],
+                            "preview_output": base_config["preview_output_name"],
+                            "hotwords": base_config["hotwords_text"],
+                            "initial_prompt": base_config["initial_prompt_text"],
+                            "spelling_map": base_config["spelling_map_text"],
+                            "batch_index": None,
+                            "job_index": index,
+                        }
+                        if attempted_candidate:
+                            skip_settings["resolved_log_level"] = attempted_candidate.get("log_level")
+                            skip_settings["resolved_asr_device"] = attempted_candidate.get("asr_device")
+                            skip_settings["resolved_precise_device"] = attempted_candidate.get(
+                                "precise_device"
+                            )
+                            skip_settings["resolved_vocal_extract"] = attempted_candidate.get(
+                                "vocal_extract"
+                            )
+
+                        skip_job_id = _generate_job_id()
+                        skip_dir = _job_dir(skip_job_id)
+                        created_at = _utc_now()
+                        status_snapshot = _job_status_template(skip_job_id, created_at)
+                        status_snapshot["status"] = "skipped"
+                        status_snapshot["error"] = reason
+                        metadata = {
+                            "job_id": skip_job_id,
+                            "audio_filename": audio_file.filename,
+                            "created_at": created_at,
+                            "preview": dict(base_config["preview_meta"]),
+                            "settings": skip_settings,
+                            "batch_index": None,
+                            "job_index": index,
+                            "skip_reason": reason,
+                        }
+                        skipped_jobs.append(
+                            {
+                                "job_id": skip_job_id,
+                                "job_dir": skip_dir,
+                                "metadata": metadata,
+                                "status": status_snapshot,
+                                "reason": reason,
+                            }
+                        )
+                        continue
+
+                    job_id = _generate_job_id()
+                    job_dir = _job_dir(job_id)
+                    inputs_dir = job_dir / "inputs"
+                    outputs_dir = job_dir / "outputs"
+                    audio_target = inputs_dir / clean_name
+
+                    hotwords_path = inputs_dir / "hotwords.txt" if hotwords_text else None
+                    initial_prompt_path = inputs_dir / "initial_prompt.txt" if initial_prompt_text else None
+                    spelling_map_path = inputs_dir / "spelling_map.csv" if spelling_map_text else None
+                    preview_output_path = (
+                        outputs_dir / preview_output_name if preview_output_name else None
+                    )
+
+                    file_payloads: list[tuple[Path, str]] = []
+                    if hotwords_path:
+                        file_payloads.append((hotwords_path, hotwords_text))
+                    if initial_prompt_path:
+                        file_payloads.append((initial_prompt_path, initial_prompt_text))
+                    if spelling_map_path:
+                        file_payloads.append((spelling_map_path, spelling_map_text))
+
+                    args = build_cli_args(
+                        audio_target,
+                        outdir=outputs_dir,
+                        ram=ram_enabled,
+                        resume=resume_enabled,
+                        num_speakers=parsed_num_speakers,
+                        hotwords_file=hotwords_path,
+                        initial_prompt_file=initial_prompt_path,
+                        spelling_map=spelling_map_path,
+                        asr_model=asr_model_value or None,
+                        asr_device=final_values["asr_device"] or None,
+                        asr_compute_type=asr_compute_type_value or None,
+                        precise_rerun=precise_rerun_enabled,
+                        precise_model=precise_model_value or None,
+                        precise_device=final_values["precise_device"] or None,
+                        precise_compute_type=precise_compute_type_value or None,
+                        vocal_extract=final_values["vocal_extract"] or None,
+                        log_level=final_values["log_level"],
+                        preview_start=preview_start_arg,
+                        preview_duration=preview_duration_arg,
+                        preview_output=preview_output_path,
+                    )
+
+                    settings_snapshot = {
+                        key: (str(val) if isinstance(val, Path) else val)
+                        for key, val in vars(args).items()
+                    }
+                    settings_snapshot["preview_requested"] = preview_requested
+                    settings_snapshot["batch_index"] = batch_counter
+                    settings_snapshot["job_index"] = index
+                    if random_field_names:
+                        settings_snapshot["randomized_fields"] = sorted(random_field_names)
+
+                    created_at = _utc_now()
+                    status_snapshot = _job_status_template(job_id, created_at)
+                    status_snapshot["audio_filename"] = audio_file.filename
+
+                    metadata = {
                         "job_id": job_id,
-                        "job_dir": job_dir,
-                        "inputs_dir": inputs_dir,
-                        "outputs_dir": outputs_dir,
-                        "audio_path": audio_target,
-                        "args": args,
-                        "metadata": metadata,
-                        "status": status_snapshot,
+                        "audio_filename": audio_file.filename,
                         "created_at": created_at,
-                        "file_payloads": file_payloads,
-                }
-                )
+                        "preview": dict(base_config["preview_meta"]),
+                        "settings": settings_snapshot,
+                        "batch_index": batch_counter,
+                        "job_index": index,
+                    }
 
-            if not job_plans:
+                    job_plans.append(
+                        {
+                            "job_id": job_id,
+                            "job_dir": job_dir,
+                            "inputs_dir": inputs_dir,
+                            "outputs_dir": outputs_dir,
+                            "audio_path": audio_target,
+                            "args": args,
+                            "metadata": metadata,
+                            "status": status_snapshot,
+                            "created_at": created_at,
+                            "file_payloads": file_payloads,
+                        }
+                    )
+                    batch_counter += 1
+
+            if not job_plans and not skipped_jobs:
                 raise HTTPException(status_code=400, detail="No job configurations provided")
 
             loop = asyncio.get_running_loop()
@@ -1418,13 +1733,26 @@ def create_app(base_dir: Optional[Path] = None) -> FastAPI:
                 future.add_done_callback(functools.partial(_consume_future, plan["job_id"]))
                 job_ids.append(plan["job_id"])
 
-            if not job_ids:
-                raise HTTPException(status_code=400, detail="No jobs were scheduled")
+            skipped_ids: list[str] = []
+            for skipped in skipped_jobs:
+                job_dir = skipped["job_dir"]
+                job_dir.mkdir(parents=True, exist_ok=True)
+                _write_json(job_dir / "metadata.json", skipped["metadata"])
+                _write_json(job_dir / "status.json", skipped["status"])
+                skipped_ids.append(skipped["job_id"])
 
-            if len(job_ids) == 1:
-                message = quote_plus(f"Started job {job_ids[0]}")
+            parts: list[str] = []
+            if job_ids:
+                if len(job_ids) == 1:
+                    parts.append(f"Started job {job_ids[0]}")
+                else:
+                    parts.append("Started jobs " + ", ".join(job_ids))
+            if skipped_ids:
+                parts.append("Skipped duplicate configs " + ", ".join(skipped_ids))
+            if parts:
+                message = quote_plus("; ".join(parts))
             else:
-                message = quote_plus("Started jobs " + ", ".join(job_ids))
+                message = quote_plus("No jobs were scheduled")
 
             return RedirectResponse(url=f"/?message={message}", status_code=303)
         finally:

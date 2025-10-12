@@ -339,3 +339,127 @@ def test_read_json_handles_partial_file(tmp_path: Path, caplog) -> None:
 
     assert parsed == {}
     assert "Failed to parse JSON" in caplog.text
+
+def test_transcribe_all_device_expands_config(tmp_path: Path, monkeypatch) -> None:
+    app = web.create_app(tmp_path)
+
+    recorded_args: list[object] = []
+
+    def fake_run_transcription(args, configure_logging=False, log_handlers=None):  # type: ignore[override]
+        recorded_args.append(args)
+        outdir = Path(args.outdir)
+        outdir.mkdir(parents=True, exist_ok=True)
+        return outdir
+
+    monkeypatch.setattr(web.cli, "run_transcription", fake_run_transcription)
+
+    with TestClient(app, follow_redirects=False) as client:
+        response = client.post(
+            "/transcribe",
+            data={
+                "job-0-log_level": web.cli.LOG.level,
+                "job-0-asr_device": "all",
+            },
+            files={"audio_file": ("session.wav", b"fake-bytes", "audio/wav")},
+        )
+
+        assert response.status_code == 303
+
+    devices = {getattr(args, "asr_device", None) or "" for args in recorded_args}
+    assert devices == {"", "cpu", "cuda", "mps"}
+
+
+def test_transcribe_random_device_avoids_duplicates(tmp_path: Path, monkeypatch) -> None:
+    app = web.create_app(tmp_path)
+
+    recorded_args: list[object] = []
+
+    def fake_run_transcription(args, configure_logging=False, log_handlers=None):  # type: ignore[override]
+        recorded_args.append(args)
+        outdir = Path(args.outdir)
+        outdir.mkdir(parents=True, exist_ok=True)
+        return outdir
+
+    monkeypatch.setattr(web.cli, "run_transcription", fake_run_transcription)
+
+    with TestClient(app, follow_redirects=False) as client:
+        response = client.post(
+            "/transcribe",
+            data={
+                "job-0-log_level": web.cli.LOG.level,
+                "job-1-asr_device": "random",
+            },
+            files={"audio_file": ("session.wav", b"fake-bytes", "audio/wav")},
+        )
+
+        assert response.status_code == 303
+
+    assert len(recorded_args) == 2
+    first_device = getattr(recorded_args[0], "asr_device", None) or ""
+    second_device = getattr(recorded_args[1], "asr_device", None) or ""
+    assert second_device
+    assert second_device != first_device
+
+    job_dirs = sorted(p for p in tmp_path.iterdir() if p.is_dir())
+    randomized = []
+    for job_dir in job_dirs:
+        metadata_path = job_dir / "metadata.json"
+        if not metadata_path.exists():
+            continue
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        settings = metadata.get("settings", {})
+        randomized.extend(settings.get("randomized_fields", []))
+    assert "asr_device" in randomized
+
+
+def test_transcribe_random_exhaustion_skips_job(tmp_path: Path, monkeypatch) -> None:
+    app = web.create_app(tmp_path)
+
+    recorded_args: list[object] = []
+
+    def fake_run_transcription(args, configure_logging=False, log_handlers=None):  # type: ignore[override]
+        recorded_args.append(args)
+        outdir = Path(args.outdir)
+        outdir.mkdir(parents=True, exist_ok=True)
+        return outdir
+
+    monkeypatch.setattr(web.cli, "run_transcription", fake_run_transcription)
+
+    with TestClient(app, follow_redirects=False) as client:
+        response = client.post(
+            "/transcribe",
+            data={
+                "job-0-log_level": web.cli.LOG.level,
+                "job-1-asr_device": "cpu",
+                "job-2-asr_device": "cuda",
+                "job-3-asr_device": "mps",
+                "job-4-asr_device": "random",
+            },
+            files={"audio_file": ("session.wav", b"fake-bytes", "audio/wav")},
+        )
+
+        assert response.status_code == 303
+        assert "Skipped+duplicate+configs" in response.headers["location"]
+
+    devices = {getattr(args, "asr_device", None) or "" for args in recorded_args}
+    assert devices == {"", "cpu", "cuda", "mps"}
+
+    job_dirs = sorted(p for p in tmp_path.iterdir() if p.is_dir())
+    assert len(job_dirs) == 5
+
+    skipped_statuses = []
+    for job_dir in job_dirs:
+        status_path = job_dir / "status.json"
+        metadata_path = job_dir / "metadata.json"
+        if not status_path.exists() or not metadata_path.exists():
+            continue
+        status = json.loads(status_path.read_text(encoding="utf-8"))
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        if status.get("status") == "skipped":
+            skipped_statuses.append((status, metadata))
+
+    assert len(skipped_statuses) == 1
+    status, metadata = skipped_statuses[0]
+    assert "duplicate" in (status.get("error") or "").lower()
+    settings = metadata.get("settings", {})
+    assert settings.get("asr_device") == "random"
