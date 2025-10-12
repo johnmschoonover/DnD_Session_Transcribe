@@ -224,3 +224,14 @@ def test_delete_job_removes_directory(tmp_path: Path) -> None:
     assert response.status_code == 303
     assert response.headers["location"] == f"/?message=Deleted+job+{job_id}"
     assert not job_dir.exists()
+
+
+def test_read_json_handles_partial_file(tmp_path: Path, caplog) -> None:
+    path = tmp_path / "broken.json"
+    path.write_text("{\"status\":", encoding="utf-8")
+
+    with caplog.at_level("WARNING"):
+        parsed = web._read_json(path)
+
+    assert parsed == {}
+    assert "Failed to parse JSON" in caplog.text
