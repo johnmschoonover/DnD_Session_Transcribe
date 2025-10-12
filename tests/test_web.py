@@ -83,6 +83,7 @@ def test_show_job_lists_outputs_from_reported_directory(tmp_path: Path) -> None:
         "created_at": "2024-01-01T00:00:00Z",
         "audio_filename": "sample.wav",
         "preview": {"requested": True, "start": 0.0, "duration": 10.0},
+        "settings": {"log_level": "INFO", "resume": False},
     }
 
     (job_dir / "status.json").write_text(json.dumps(status), encoding="utf-8")
@@ -99,6 +100,8 @@ def test_show_job_lists_outputs_from_reported_directory(tmp_path: Path) -> None:
     assert 'href="/runs/job-123/files/preview_outputs/notes%20final.txt"' in html
     assert 'href="/runs/job-123/log"' in html
     assert 'audio controls src="/runs/job-123/files/preview_outputs/example_preview.wav"' in html
+    assert "Settings" in html
+    assert "log_level" in html
 
 
 def test_transcribe_redirects_home_and_lists_job(
@@ -134,6 +137,9 @@ def test_transcribe_redirects_home_and_lists_job(
         status_path = job_dir / "status.json"
         assert status_path.exists()
 
+        metadata_path = job_dir / "metadata.json"
+        assert metadata_path.exists()
+
         status = None
         for _ in range(10):
             content = status_path.read_text(encoding="utf-8")
@@ -145,6 +151,14 @@ def test_transcribe_redirects_home_and_lists_job(
         assert status is not None, "status.json remained empty"
         assert status["job_id"] == job_dir.name
         assert status["status"] in {"running", "completed"}
+
+        metadata_content = metadata_path.read_text(encoding="utf-8")
+        metadata = json.loads(metadata_content)
+        assert "settings" in metadata
+        settings = metadata["settings"]
+        assert settings["log_level"] == web.cli.LOG.level
+        assert settings["resume"] is False
+        assert settings["preview_requested"] is False
 
         dashboard_html = client.get("/").text
         link_snippet = (
