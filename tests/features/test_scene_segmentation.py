@@ -37,4 +37,3 @@ def test_timeline_highlights_dominant_speakers_and_keywords():
     assert timeline[0]["label"] == "roleplay"
     assert "Cleric" in timeline[0]["dominant_speakers"]
     assert "persuade" in timeline[0]["highlight_terms"]
-

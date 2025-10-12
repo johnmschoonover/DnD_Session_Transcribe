@@ -277,4 +277,3 @@ __all__ = [
     "SceneSnapshot",
     "TranscriptSegment",
 ]
-
