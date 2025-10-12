@@ -36,6 +36,22 @@ def _patch_cli_state(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(job_services.cli, "LOG", SimpleNamespace(level="WARNING"))
 
 
+def test_resolve_selection_normalizes_sentinel_values() -> None:
+    mode, choices = job_services._resolve_selection("ALL", ("one", "two"))
+    assert mode == "all"
+    assert choices == ["one", "two"]
+
+    mode, choices = job_services._resolve_selection("Random", ("alpha", "beta"))
+    assert mode == "random"
+    assert choices == ["alpha", "beta"]
+
+
+def test_resolve_selection_matches_allowed_case_insensitively() -> None:
+    mode, choices = job_services._resolve_selection("CPU", ("", "cpu", "cuda"))
+    assert mode == "single"
+    assert choices == ["cpu"]
+
+
 @pytest.mark.asyncio()
 async def test_job_runner_success(tmp_path: Path) -> None:
     loop = asyncio.get_running_loop()

@@ -184,12 +184,18 @@ _VOCAL_VALUES = [value for value, _ in _VOCAL_OPTIONS]
 
 
 def _resolve_selection(value: str, allowed: Sequence[str]) -> tuple[str, list[str]]:
-    if value == "all":
+    normalized = value.strip()
+    sentinel = normalized.casefold()
+
+    if sentinel == "all":
         return "all", list(allowed)
-    if value == "random":
+    if sentinel == "random":
         return "random", list(allowed)
-    if value in allowed:
-        return "single", [value]
+
+    for option in allowed:
+        if sentinel == option.casefold():
+            return "single", [option]
+
     raise ValueError(f"Invalid selection: {value}")
 
 
