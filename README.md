@@ -118,9 +118,9 @@ Intermediate JSON checkpoints (e.g., `*_fw_segments_scrubbed.json`) are also sav
 
 ## Testing
 
-Refer to [docs/testing.md](docs/testing.md) for the current pytest status. In short, a clean environment hits an import error for
-`fastapi.testclient` because FastAPI is not installed by default; installing `fastapi[standard]` or adding `fastapi>=0.109,<1`
-to your development requirements resolves the missing module so the web integration tests can run.
+Refer to [docs/testing.md](docs/testing.md) for the current pytest status. The FastAPI-powered web tests now run out of the box
+because `fastapi>=0.119` and `httpx>=0.28` ship with the core package, so `pytest -q` should collect cleanly after a standard
+`pip install .` or editable install.
 
 ## Troubleshooting
 - **Missing Hugging Face access** – If the script stops with `[HF] Missing HUGGINGFACE_TOKEN`, generate or renew a token on Hugging Face, grant it access to the pyannote models, and export it before retrying.
