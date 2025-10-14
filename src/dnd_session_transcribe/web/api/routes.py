@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import Any
 from urllib.parse import quote_plus
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
@@ -23,8 +24,28 @@ def get_job_service(request: Request) -> JobService:
 @router.get("/", response_class=HTMLResponse)
 async def home(request: Request, service: JobService = Depends(get_job_service)) -> str:
     message = request.query_params.get("message")
+    load_job_id = request.query_params.get("load_job")
+    prefill_jobs: list[dict[str, Any]] | None = None
+    load_message: str | None = None
+
+    if load_job_id:
+        try:
+            prefill_jobs = [service.export_job_settings(load_job_id)]
+            load_message = f"Loaded settings from {load_job_id}"
+        except HTTPException as exc:
+            if exc.status_code == 404:
+                load_message = f"Job {load_job_id} not found"
+            else:
+                raise
+
+    combined_message = message
+    if load_message:
+        combined_message = (
+            f"{message} | {load_message}" if message else load_message
+        )
+
     jobs = service.list_jobs()
-    return render_home(jobs, message)
+    return render_home(jobs, combined_message, prefill_jobs=prefill_jobs or [])
 
 
 @router.post("/transcribe")
@@ -84,4 +105,33 @@ async def download_file(
 async def delete_job(job_id: str, service: JobService = Depends(get_job_service)) -> RedirectResponse:
     service.delete_job(job_id)
     message = f"Deleted job {job_id}"
-    return RedirectResponse(url=f"/?message={quote_plus(message)}", status_code=303)
+    return RedirectResponse(
+        url=f"/?message={quote_plus(message)}#run-console", status_code=303
+    )
+
+
+@router.post("/runs/batch-delete")
+async def batch_delete(
+    request: Request, service: JobService = Depends(get_job_service)
+) -> RedirectResponse:
+    form = await request.form()
+    job_ids = [value for value in form.getlist("job_ids") if value]
+    if not job_ids:
+        raise HTTPException(status_code=400, detail="No jobs selected")
+
+    deleted, missing = service.delete_jobs(job_ids)
+    parts: list[str] = []
+    if deleted:
+        if len(deleted) == 1:
+            parts.append(f"Deleted job {deleted[0]}")
+        else:
+            parts.append("Deleted jobs " + ", ".join(deleted))
+    if missing:
+        if len(missing) == 1:
+            parts.append(f"Job {missing[0]} was not found")
+        else:
+            parts.append("Jobs " + ", ".join(missing) + " were not found")
+    message = "; ".join(parts) if parts else "No jobs deleted"
+    return RedirectResponse(
+        url=f"/?message={quote_plus(message)}#run-console", status_code=303
+    )
