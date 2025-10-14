@@ -125,7 +125,7 @@ def _job_config_block(index: str, *, removable: bool) -> str:
         + "</section>"
         + "<section class=\"config-card wide\">"
         + "<h4>Preview Builder</h4>"
-        + f"<label class=\"checkbox-inline\"><input type=\"checkbox\" id=\"{prefix}preview_enabled\" name=\"{prefix}preview_enabled\" value=\"true\" checked /> Generate 10s teaser</label>"
+        + f"<label class=\"checkbox-inline\"><input type=\"checkbox\" id=\"{prefix}preview_enabled\" name=\"{prefix}preview_enabled\" value=\"true\" /> Generate 10s teaser</label>"
         + "<div class=\"preview-grid\">"
         + "<div class=\"preview-field\">"
         + f"<label for=\"{prefix}preview_start\">Start</label>"
@@ -146,7 +146,12 @@ def _job_config_block(index: str, *, removable: bool) -> str:
     )
 
 
-def render_home(jobs: Iterable[dict[str, Any]], message: str | None = None) -> str:
+def render_home(
+    jobs: Iterable[dict[str, Any]],
+    message: str | None = None,
+    *,
+    prefill_jobs: Sequence[Mapping[str, Any]] | None = None,
+) -> str:
     rows = []
     for job in jobs:
         raw_job_id = job.get("job_id", "")
@@ -160,17 +165,32 @@ def render_home(jobs: Iterable[dict[str, Any]], message: str | None = None) -> s
         created = html.escape(job.get("created_at", ""))
         updated = html.escape(job.get("updated_at", ""))
         error = html.escape(job.get("error", "") or "")
+        job_attr = html.escape(job_id_text, quote=True)
+        checkbox = (
+            "<input type=\"checkbox\" class=\"job-select\" "
+            f"name=\"job_ids\" value=\"{job_attr}\" "
+            "form=\"batch-delete-form\" aria-label=\"Select job\" />"
+        )
+        delete_form = (
+            f"<form action=\"{delete_action}\" method=\"post\" "
+            "class=\"inline-form delete-form\" "
+            f"data-job-id=\"{job_attr}\">"
+            "<button type=\"button\" class=\"delete-button\" data-action=\"delete-single\">Delete</button>"
+            "</form>"
+        )
         rows.append(
-            "<tr>"
+            f"<tr data-job-id=\"{job_attr}\">"
+            f"<td class=\"select-cell\">{checkbox}</td>"
             f"<td><a href=\"{job_href}\" target=\"_blank\" rel=\"noopener noreferrer\">{job_id}</a></td>"
             f"<td>{status}</td><td>{created}</td><td>{updated}</td><td>{error}</td>"
-            f"<td><form action=\"{delete_action}\" method=\"post\" class=\"inline-form\" "
-            "onsubmit=\"return confirm('Delete this job and all associated files?');\">"
-            "<button type=\"submit\" class=\"delete-button\">Delete</button></form></td>"
+            f"<td class=\"actions-cell\">{delete_form}</td>"
             "</tr>"
         )
 
-    message_html = f"<div class='message'>{html.escape(message)}</div>" if message else ""
+    message_html = ""
+    if message:
+        safe_message = html.escape(message).replace("\n", "<br />")
+        message_html = f"<div class='message'>{safe_message}</div>"
 
     initial_job_block = _job_config_block("0", removable=False)
     template_job_block = _job_config_block("__INDEX__", removable=True)
@@ -183,6 +203,9 @@ def render_home(jobs: Iterable[dict[str, Any]], message: str | None = None) -> s
         f"<option value=\"{html.escape(value)}\"></option>"
         for value in _COMPUTE_TYPE_SUGGESTIONS
     )
+
+    prefill_payload = json.dumps(list(prefill_jobs or []))
+    prefill_payload = prefill_payload.replace("</", "<\\/")
 
     return f"""
 <!DOCTYPE html>
@@ -269,6 +292,8 @@ def render_home(jobs: Iterable[dict[str, Any]], message: str | None = None) -> s
     select,
     textarea {{
       width: 100%;
+      max-width: 100%;
+      box-sizing: border-box;
       background: rgba(2, 4, 6, 0.65);
       border: 1px solid rgba(57,255,20,0.35);
       border-radius: 10px;
@@ -287,6 +312,16 @@ def render_home(jobs: Iterable[dict[str, Any]], message: str | None = None) -> s
     textarea {{
       min-height: 5rem;
       resize: vertical;
+    }}
+
+    .config-card input + label,
+    .config-card select + label,
+    .config-card textarea + label {{
+      margin-top: 0.85rem;
+    }}
+
+    .checkbox-grid label {{
+      margin-top: 0;
     }}
 
     .help-text {{
@@ -429,6 +464,23 @@ def render_home(jobs: Iterable[dict[str, Any]], message: str | None = None) -> s
       border-bottom: none;
     }}
 
+    .table-toolbar {{
+      width: min(100%, 1100px);
+      display: flex;
+      justify-content: flex-end;
+      margin-bottom: 0.75rem;
+      gap: 0.75rem;
+    }}
+
+    .select-cell {{
+      width: 3rem;
+      text-align: center;
+    }}
+
+    .actions-cell {{
+      text-align: right;
+    }}
+
     .message {{
       background: rgba(57,255,20,0.15);
       border: 1px solid rgba(57,255,20,0.35);
@@ -444,9 +496,85 @@ def render_home(jobs: Iterable[dict[str, Any]], message: str | None = None) -> s
     }}
 
     .delete-button {{
-      border-color: rgba(255,60,127,0.75);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0.45rem 1.1rem;
+      border: 1px solid rgba(255,60,127,0.75);
+      border-radius: 10px;
       background: linear-gradient(135deg, rgba(255,60,127,0.5), rgba(255,60,127,0.1));
-      box-shadow: 0 0 16px rgba(255,60,127,0.32);
+      box-shadow: 0 0 12px rgba(255,60,127,0.24);
+      color: var(--text);
+      text-transform: uppercase;
+      letter-spacing: 0.18em;
+      font-size: 0.75rem;
+      line-height: 1;
+      min-height: 0;
+      cursor: pointer;
+      transition: transform 0.2s ease, box-shadow 0.2s ease;
+    }}
+
+    .delete-button:hover {{
+      transform: translateY(-1px);
+      box-shadow: 0 0 16px rgba(255,60,127,0.38);
+    }}
+
+    .delete-button:focus-visible {{
+      outline: 2px solid rgba(255,60,127,0.65);
+      outline-offset: 2px;
+    }}
+
+    .neon-button:disabled,
+    .neon-button[aria-disabled='true'] {{
+      opacity: 0.45;
+      cursor: not-allowed;
+      box-shadow: 0 0 8px rgba(57,255,20,0.12);
+    }}
+
+    .modal {{
+      position: fixed;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(0, 0, 0, 0.6);
+      backdrop-filter: blur(6px);
+      z-index: 1000;
+      padding: 1.5rem;
+    }}
+
+    .modal[hidden] {{
+      display: none;
+    }}
+
+    .modal-dialog {{
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 1.75rem;
+      width: min(100%, 420px);
+      box-shadow: 0 0 25px rgba(57,255,20,0.22);
+    }}
+
+    .modal h3 {{
+      margin: 0 0 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.18em;
+      color: var(--muted);
+      font-size: 0.9rem;
+    }}
+
+    .modal p {{
+      margin: 0;
+      white-space: pre-wrap;
+      line-height: 1.6;
+    }}
+
+    .modal-actions {{
+      margin-top: 1.5rem;
+      display: flex;
+      justify-content: flex-end;
+      gap: 0.75rem;
     }}
 
     @media (max-width: 960px) {{
@@ -457,7 +585,7 @@ def render_home(jobs: Iterable[dict[str, Any]], message: str | None = None) -> s
   </style>
 </head>
 <body>
-  <h1>DnD Session Transcribe</h1>
+  <h1 id=\"command-console\">DnD Session Transcribe</h1>
   {message_html}
   <form action=\"/transcribe\" method=\"post\" enctype=\"multipart/form-data\">
     <fieldset>
@@ -478,13 +606,17 @@ def render_home(jobs: Iterable[dict[str, Any]], message: str | None = None) -> s
     </div>
   </form>
 
-  <h2>Run console</h2>
+  <h2 id=\"run-console\">Run console</h2>
+  <div class=\"table-toolbar\">
+    <button type=\"button\" id=\"delete-selected\" class=\"neon-button delete-button\" disabled aria-disabled=\"true\">Delete selected</button>
+  </div>
   <table>
-    <thead><tr><th>Job</th><th>Status</th><th>Created</th><th>Updated</th><th>Error</th><th>Actions</th></tr></thead>
+    <thead><tr><th class=\"select-cell\"><input type=\"checkbox\" id=\"select-all\" aria-label=\"Select all jobs\" /></th><th>Job</th><th>Status</th><th>Created</th><th>Updated</th><th>Error</th><th>Actions</th></tr></thead>
     <tbody>
-      {''.join(rows) if rows else "<tr><td colspan='6'>No jobs yet.</td></tr>"}
+      {''.join(rows) if rows else "<tr><td colspan='7'>No jobs yet.</td></tr>"}
     </tbody>
   </table>
+  <form id=\"batch-delete-form\" action=\"/runs/batch-delete\" method=\"post\"></form>
   <template id=\"job-template\">
     {template_job_block}
   </template>
@@ -494,11 +626,31 @@ def render_home(jobs: Iterable[dict[str, Any]], message: str | None = None) -> s
   <datalist id=\"compute-types\">
     {compute_type_datalist}
   </datalist>
+  <div class=\"modal\" id=\"confirm-modal\" role=\"dialog\" aria-modal=\"true\" aria-labelledby=\"confirm-modal-title\" hidden>
+    <div class=\"modal-dialog\">
+      <h3 id=\"confirm-modal-title\">Confirm deletion</h3>
+      <p id=\"confirm-modal-message\"></p>
+      <div class=\"modal-actions\">
+        <button type=\"button\" class=\"neon-button secondary\" id=\"confirm-modal-cancel\">Cancel</button>
+        <button type=\"button\" class=\"neon-button delete-button\" id=\"confirm-modal-confirm\">Delete</button>
+      </div>
+    </div>
+  </div>
+  <script type=\"application/json\" id=\"prefill-data\">{prefill_payload}</script>
   <script>
     (function() {{
       const container = document.getElementById('jobs-container');
       const template = document.getElementById('job-template');
       const addButton = document.getElementById('add-job');
+      const batchForm = document.getElementById('batch-delete-form');
+      const selectAll = document.getElementById('select-all');
+      const deleteSelectedButton = document.getElementById('delete-selected');
+      const modal = document.getElementById('confirm-modal');
+      const modalMessage = document.getElementById('confirm-modal-message');
+      const modalConfirm = document.getElementById('confirm-modal-confirm');
+      const modalCancel = document.getElementById('confirm-modal-cancel');
+      const prefillElement = document.getElementById('prefill-data');
+      let pendingConfirm = null;
       if (!container || !template || !addButton) {{
         return;
       }}
@@ -522,20 +674,54 @@ def render_home(jobs: Iterable[dict[str, Any]], message: str | None = None) -> s
         return wrapper.firstElementChild;
       }}
 
-      function copyValues(source, target) {{
-        if (!source || !target) {{
-          return;
-        }}
-        const fieldMap = new Map();
+      function getFieldMap(target) {{
+        const map = new Map();
         target.querySelectorAll('input, select, textarea').forEach((element) => {{
           const name = element.getAttribute('name');
           if (!name) {{
             return;
           }}
           const segments = name.includes('-') ? name.split('-').slice(2) : [name];
-          fieldMap.set(segments.join('-'), element);
+          map.set(segments.join('-'), element);
         }});
+        return map;
+      }}
 
+      function coerceCheckboxValue(value) {{
+        if (typeof value === 'string') {{
+          return value.toLowerCase() === 'true';
+        }}
+        return Boolean(value);
+      }}
+
+      function applyValues(target, values) {{
+        if (!target || !values || typeof values !== "object") {{
+          return;
+        }}
+        const fieldMap = getFieldMap(target);
+        Object.entries(values).forEach(([key, value]) => {{
+          const destination = fieldMap.get(key);
+          if (!destination) {{
+            return;
+          }}
+          if (destination instanceof HTMLInputElement && destination.type === 'file') {{
+            return;
+          }}
+          if (destination instanceof HTMLInputElement && destination.type === 'checkbox') {{
+            destination.checked = coerceCheckboxValue(value);
+            return;
+          }}
+          if ('value' in destination) {{
+            destination.value = value == null ? '' : String(value);
+          }}
+        }});
+      }}
+
+      function copyValues(source, target) {{
+        if (!source || !target) {{
+          return;
+        }}
+        const fieldMap = getFieldMap(target);
         source.querySelectorAll('input, select, textarea').forEach((element) => {{
           const name = element.getAttribute('name');
           if (!name) {{
@@ -601,7 +787,172 @@ def render_home(jobs: Iterable[dict[str, Any]], message: str | None = None) -> s
         renumber();
       }});
 
+      function parsePrefill() {{
+        if (!prefillElement || !prefillElement.textContent) {{
+          return [];
+        }}
+        try {{
+          const data = JSON.parse(prefillElement.textContent);
+          return Array.isArray(data) ? data : [];
+        }} catch (error) {{
+          console.warn('Failed to parse prefill data', error);
+          return [];
+        }}
+      }}
+
+      const prefillData = parsePrefill();
+      if (prefillData.length) {{
+        const existing = container.querySelector('.job-config');
+        if (existing) {{
+          applyValues(existing, prefillData[0]);
+        }}
+        for (let idx = 1; idx < prefillData.length; idx += 1) {{
+          const newBlock = createBlock(nextIndex);
+          if (!newBlock) {{
+            continue;
+          }}
+          container.appendChild(newBlock);
+          applyValues(newBlock, prefillData[idx]);
+          nextIndex += 1;
+        }}
+        renumber();
+        const consoleHeader = document.getElementById('command-console');
+        if (consoleHeader) {{
+          consoleHeader.scrollIntoView({{ behavior: 'smooth' }});
+        }}
+      }}
+
+      function getSelectedJobs() {{
+        return Array.from(document.querySelectorAll('.job-select:checked'));
+      }}
+
+      function updateSelectionState() {{
+        const selected = getSelectedJobs();
+        const checkboxes = Array.from(document.querySelectorAll('.job-select'));
+        if (deleteSelectedButton) {{
+          const disabled = selected.length === 0;
+          deleteSelectedButton.disabled = disabled;
+          deleteSelectedButton.setAttribute('aria-disabled', String(disabled));
+        }}
+        if (selectAll) {{
+          const total = checkboxes.length;
+          const checked = selected.length;
+          selectAll.checked = total > 0 && checked === total;
+          selectAll.indeterminate = checked > 0 && checked < total;
+        }}
+      }}
+
+      if (selectAll) {{
+        selectAll.addEventListener('change', () => {{
+          const shouldCheck = selectAll.checked;
+          document.querySelectorAll('.job-select').forEach((checkbox) => {{
+            if (checkbox instanceof HTMLInputElement) {{
+              checkbox.checked = shouldCheck;
+            }}
+          }});
+          updateSelectionState();
+        }});
+      }}
+
+      document.addEventListener('change', (event) => {{
+        const target = event.target;
+        if (target instanceof HTMLInputElement && target.classList.contains('job-select')) {{
+          updateSelectionState();
+        }}
+      }});
+
+      function closeModal() {{
+        if (!modal) {{
+          return;
+        }}
+        modal.hidden = true;
+        modal.classList.remove('is-visible');
+        pendingConfirm = null;
+      }}
+
+      function openModal(message, onConfirm) {{
+        if (!modal || !modalMessage || !modalConfirm || !modalCancel) {{
+          if (typeof onConfirm === "function") {{
+            onConfirm();
+          }}
+          return;
+        }}
+        modalMessage.textContent = message;
+        modal.hidden = false;
+        modal.classList.add('is-visible');
+        pendingConfirm = typeof onConfirm === "function" ? onConfirm : null;
+        modalConfirm.focus();
+      }}
+
+      if (modalConfirm) {{
+        modalConfirm.addEventListener('click', () => {{
+          const action = pendingConfirm;
+          closeModal();
+          if (typeof action === "function") {{
+            action();
+          }}
+        }});
+      }}
+
+      if (modalCancel) {{
+        modalCancel.addEventListener('click', () => {{
+          closeModal();
+        }});
+      }}
+
+      if (modal) {{
+        modal.addEventListener('click', (event) => {{
+          if (event.target === modal) {{
+            closeModal();
+          }}
+        }});
+      }}
+
+      document.addEventListener('keydown', (event) => {{
+        if (event.key === 'Escape' && modal && !modal.hidden) {{
+          closeModal();
+        }}
+      }});
+
+      document.addEventListener('click', (event) => {{
+        const target = event.target;
+        if (!(target instanceof HTMLElement)) {{
+          return;
+        }}
+        if (target.dataset.action === 'delete-single') {{
+          event.preventDefault();
+          const form = target.closest('form');
+          const jobId = form ? form.dataset.jobId : "";
+          const messageText = jobId ? `Delete job ${{jobId}}?` : "Delete this job?";
+          openModal(messageText, () => {{
+            if (form) {{
+              form.submit();
+            }}
+          }});
+        }}
+      }});
+
+      if (deleteSelectedButton && batchForm) {{
+        deleteSelectedButton.addEventListener('click', () => {{
+          const selections = getSelectedJobs();
+          if (!selections.length) {{
+            return;
+          }}
+          const ids = selections.map((input) => input.value).filter(Boolean);
+          let messageText;
+          if (ids.length === 1) {{
+            messageText = `Delete job ${{ids[0]}}?`;
+          }} else {{
+            messageText = `Delete ${{ids.length}} jobs?\n${{ids.join(', ')}}`;
+          }}
+          openModal(messageText, () => {{
+            batchForm.submit();
+          }});
+        }});
+      }}
+
       renumber();
+      updateSelectionState();
     }})();
   </script>
 </body>
@@ -803,8 +1154,62 @@ def render_job_detail(
       border: 1px solid rgba(255,60,127,0.35);
     }}
 
-    .delete-form {{
+    .action-bar {{
       margin-top: 1.5rem;
+      display: flex;
+      gap: 1rem;
+      flex-wrap: wrap;
+      align-items: center;
+    }}
+
+    .delete-form {{
+      margin: 0;
+    }}
+
+    .modal {{
+      position: fixed;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(0, 0, 0, 0.6);
+      backdrop-filter: blur(6px);
+      z-index: 1000;
+      padding: 1.5rem;
+    }}
+
+    .modal[hidden] {{
+      display: none;
+    }}
+
+    .modal-dialog {{
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 1.75rem;
+      width: min(100%, 420px);
+      box-shadow: 0 0 25px rgba(57,255,20,0.22);
+    }}
+
+    .modal h3 {{
+      margin: 0 0 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.18em;
+      color: var(--muted);
+      font-size: 0.9rem;
+    }}
+
+    .modal p {{
+      margin: 0;
+      white-space: pre-wrap;
+      line-height: 1.6;
+    }}
+
+    .modal-actions {{
+      margin-top: 1.5rem;
+      display: flex;
+      justify-content: flex-end;
+      gap: 0.75rem;
     }}
 
     .neon-button {{
@@ -820,10 +1225,33 @@ def render_job_detail(
       box-shadow: 0 0 18px rgba(57,255,20,0.28);
     }}
 
-    .neon-button.delete-button {{
-      border-color: rgba(255,60,127,0.75);
+    .delete-button {{
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0.45rem 1.1rem;
+      border: 1px solid rgba(255,60,127,0.75);
+      border-radius: 10px;
       background: linear-gradient(135deg, rgba(255,60,127,0.5), rgba(255,60,127,0.1));
-      box-shadow: 0 0 16px rgba(255,60,127,0.32);
+      box-shadow: 0 0 12px rgba(255,60,127,0.24);
+      color: var(--text);
+      text-transform: uppercase;
+      letter-spacing: 0.18em;
+      font-size: 0.75rem;
+      line-height: 1;
+      min-height: 0;
+      cursor: pointer;
+      transition: transform 0.2s ease, box-shadow 0.2s ease;
+    }}
+
+    .delete-button:hover {{
+      transform: translateY(-1px);
+      box-shadow: 0 0 16px rgba(255,60,127,0.38);
+    }}
+
+    .delete-button:focus-visible {{
+      outline: 2px solid rgba(255,60,127,0.65);
+      outline-offset: 2px;
     }}
 
     .neon-button:hover {{
@@ -858,4 +1286,4 @@ def render_job_detail(
     {file_list}
     {log_link}
   </div>
-  <form action=\"{delete_action}\" method=\"post\" class=\"delete-form\" onsubmit=\"return confirm('Delete this job and all associated files?');\">\n    <button type=\"submit\" class=\"neon-button delete-button\">Delete job</button>\n  </form>\n  <footer><a href=\"/\">Return to command console</a></footer>\n</body>\n</html>\n"""
+  <div class='action-bar'>\n    <a href=\"{load_href}\" class=\"neon-button secondary\">Load in command console</a>\n    <form action=\"{delete_action}\" method=\"post\" class=\"delete-form\" data-job-id=\"{job_id}\">\n      <button type=\"button\" class=\"neon-button delete-button\" data-action=\"delete-single\">Delete job</button>\n    </form>\n  </div>\n  <div class=\"modal\" id=\"job-confirm-modal\" role=\"dialog\" aria-modal=\"true\" aria-labelledby=\"job-confirm-title\" hidden>\n    <div class=\"modal-dialog\">\n      <h3 id=\"job-confirm-title\">Confirm deletion</h3>\n      <p id=\"job-confirm-message\"></p>\n      <div class=\"modal-actions\">\n        <button type=\"button\" class=\"neon-button secondary\" id=\"job-confirm-cancel\">Cancel</button>\n        <button type=\"button\" class=\"neon-button delete-button\" id=\"job-confirm-confirm\">Delete</button>\n      </div>\n    </div>\n  </div>\n  <footer><a href=\"/\">Return to command console</a></footer>\n  <script>\n    (function() {{\n      const form = document.querySelector('.delete-form');\n      const trigger = form ? form.querySelector('[data-action=\"delete-single\"]') : null;\n      const modal = document.getElementById('job-confirm-modal');\n      const messageEl = document.getElementById('job-confirm-message');\n      const confirmButton = document.getElementById('job-confirm-confirm');\n      const cancelButton = document.getElementById('job-confirm-cancel');\n      if (!form || !trigger || !modal || !messageEl || !confirmButton || !cancelButton) {{\n        return;\n      }}\n      const jobId = form.dataset.jobId || '';\n      const messageText = jobId ? `Delete job ${{jobId}}?` : 'Delete this job?';\n      function closeModal() {{\n        modal.hidden = true;\n        modal.classList.remove('is-visible');\n      }}\n      function openModal() {{\n        messageEl.textContent = messageText;\n        modal.hidden = false;\n        modal.classList.add('is-visible');\n        confirmButton.focus();\n      }}\n      confirmButton.addEventListener('click', () => {{\n        closeModal();\n        form.submit();\n      }});\n      cancelButton.addEventListener('click', () => {{\n        closeModal();\n      }});\n      modal.addEventListener('click', (event) => {{\n        if (event.target === modal) {{\n          closeModal();\n        }}\n      }});\n      document.addEventListener('keydown', (event) => {{\n        if (event.key === 'Escape' && !modal.hidden) {{\n          closeModal();\n        }}\n      }});\n      trigger.addEventListener('click', (event) => {{\n        event.preventDefault();\n        openModal();\n      }});\n    }})();\n  </script>\n</body>\n</html>\n"""

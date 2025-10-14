@@ -839,7 +839,7 @@ class JobService:
             if temp_audio is not None:
                 temp_audio.unlink(missing_ok=True)
 
-    def delete_job(self, job_id: str) -> None:
+    def _remove_job_dir(self, job_id: str) -> None:
         job_dir = self.job_dir(job_id)
         if not job_dir.exists() or not job_dir.is_dir():
             raise HTTPException(status_code=404, detail="Job not found")
@@ -848,6 +848,87 @@ class JobService:
         except Exception as exc:  # pylint: disable=broad-except
             LOGGER.exception("Failed to delete job %s", job_id)
             raise HTTPException(status_code=500, detail="Failed to delete job") from exc
+
+    def delete_job(self, job_id: str) -> None:
+        self._remove_job_dir(job_id)
+
+    def delete_jobs(self, job_ids: Sequence[str]) -> tuple[list[str], list[str]]:
+        deleted: list[str] = []
+        missing: list[str] = []
+        for job_id in job_ids:
+            try:
+                self._remove_job_dir(job_id)
+            except HTTPException as exc:
+                if exc.status_code == 404:
+                    missing.append(job_id)
+                    continue
+                raise
+            else:
+                deleted.append(job_id)
+        return deleted, missing
+
+    def export_job_settings(self, job_id: str) -> dict[str, Any]:
+        _, metadata = self.load_job(job_id)
+        settings = metadata.get("settings")
+        if not isinstance(settings, Mapping):
+            raise HTTPException(status_code=404, detail="Job settings not available")
+
+        job_dir = self.job_dir(job_id)
+
+        def _read_payload(raw_path: Any) -> str:
+            if not raw_path:
+                return ""
+            path = Path(str(raw_path))
+            if not path.is_absolute():
+                path = job_dir / path
+            try:
+                resolved = path.resolve()
+            except OSError:
+                return ""
+            try:
+                resolved.relative_to(job_dir)
+            except ValueError:
+                return ""
+            if not resolved.exists() or not resolved.is_file():
+                return ""
+            try:
+                return resolved.read_text(encoding="utf-8")
+            except OSError:
+                return ""
+
+        def _string_or_empty(value: Any) -> str:
+            if value is None:
+                return ""
+            return str(value)
+
+        payload: dict[str, Any] = {
+            "log_level": settings.get("log_level", cli.LOG.level),
+            "num_speakers": _string_or_empty(settings.get("num_speakers") or ""),
+            "ram": bool(settings.get("ram", False)),
+            "resume": bool(settings.get("resume", False)),
+            "precise_rerun": bool(settings.get("precise_rerun", False)),
+            "asr_model": _string_or_empty(settings.get("asr_model")),
+            "asr_device": _string_or_empty(settings.get("asr_device")),
+            "asr_compute_type": _string_or_empty(settings.get("asr_compute_type")),
+            "precise_model": _string_or_empty(settings.get("precise_model")),
+            "precise_device": _string_or_empty(settings.get("precise_device")),
+            "precise_compute_type": _string_or_empty(settings.get("precise_compute_type")),
+            "vocal_extract": _string_or_empty(settings.get("vocal_extract")),
+            "preview_start": _string_or_empty(settings.get("preview_start")),
+            "preview_duration": _string_or_empty(settings.get("preview_duration")),
+            "preview_output": _string_or_empty(
+                Path(settings["preview_output"]).name
+                if settings.get("preview_output")
+                else ""
+            ),
+            "preview_enabled": bool(settings.get("preview_requested", False)),
+        }
+
+        payload["hotwords"] = _read_payload(settings.get("hotwords_file"))
+        payload["initial_prompt"] = _read_payload(settings.get("initial_prompt_file"))
+        payload["spelling_map"] = _read_payload(settings.get("spelling_map"))
+
+        return payload
 
 
 __all__ += [
