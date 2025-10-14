@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 import os, sys, pathlib
+import json
 import logging
 
 # --- progress bars ---
@@ -23,6 +24,7 @@ from .util.helpers import (
     load_hotwords, load_initial_prompt,
     load_spelling_map, apply_spelling_rules, atomic_json
 )
+from .helpers import preflight_analyze_and_suggest
 
 # --- utilities (infra helpers) ---
 from .adapters.copy_to_ram import copy_to_ram_if_requested
@@ -51,7 +53,8 @@ import torch
 import argparse
 import contextlib
 import shutil
-from dataclasses import replace
+import time
+from dataclasses import replace, fields
 
 
 logger = logging.getLogger(__name__)
@@ -144,6 +147,50 @@ def parse_args():
         "--preview-output",
         default=None,
         help="Optional path for the rendered preview WAV (default: alongside audio)",
+    )
+    ap.add_argument(
+        "--auto-tune",
+        action="store_true",
+        help="Run preflight analysis to suggest ASR/VAD parameters (disabled by default)",
+    )
+    ap.add_argument(
+        "--auto-tune-mode",
+        choices=["suggest", "apply"],
+        default="apply",
+        help="Choose whether to apply suggestions or only report them",
+    )
+    ap.add_argument(
+        "--pre-norm",
+        choices=["off", "suggest", "apply"],
+        default="suggest",
+        help="Control automatic pre-normalisation handling",
+    )
+    ap.add_argument(
+        "--autotune-cache-ttl",
+        type=int,
+        default=86400,
+        help="Seconds to retain preflight cache entries (default: 1 day)",
+    )
+    ap.add_argument(
+        "--autotune-dump",
+        default=None,
+        help="Directory for preflight diagnostics (default: output directory)",
+    )
+    ap.add_argument(
+        "--no-cache",
+        action="store_true",
+        dest="autotune_no_cache",
+        help="Disable the preflight analysis cache",
+    )
+    ap.add_argument(
+        "--log-preflight",
+        action="store_true",
+        help="Emit detailed preflight diagnostics to the log",
+    )
+    ap.add_argument(
+        "--redact-paths",
+        action="store_true",
+        help="Redact file paths in preflight artifacts",
     )
     return ap.parse_args()
 
@@ -285,6 +332,7 @@ def run_transcription(
             )
 
         asr_cfg, dia_cfg, prec_cfg, pre_cfg = _clone_pipeline_configs()
+        baseline_asr_cfg = replace(asr_cfg)
 
         # CLI → config overrides
         if args.vocal_extract is not None:
@@ -309,6 +357,13 @@ def run_transcription(
             prec_cfg.device = args.precise_device
         if args.precise_compute_type:
             prec_cfg.compute_type = args.precise_compute_type
+
+        user_override_fields: dict[str, object] = {}
+        for field in fields(asr_cfg):
+            base_value = getattr(baseline_asr_cfg, field.name)
+            current_value = getattr(asr_cfg, field.name)
+            if current_value != base_value:
+                user_override_fields[field.name] = current_value
 
         # outdir (auto textN if not provided)
         if outdir is None:
@@ -347,6 +402,68 @@ def run_transcription(
         sp_rules = load_spelling_map(args.spelling_map)
         if sp_rules:
             logger.debug("Loaded %d spelling correction rules", len(sp_rules))
+
+        preflight_diag: dict | None = None
+        if args.auto_tune:
+            preflight_start = time.perf_counter()
+            dump_dir = (
+                pathlib.Path(args.autotune_dump).expanduser().resolve()
+                if args.autotune_dump
+                else outdir
+            )
+            dump_dir.mkdir(parents=True, exist_ok=True)
+
+            preflight_cfg, preflight_diag = preflight_analyze_and_suggest(
+                pathlib.Path(VOCAL_AUDIO),
+                user_overrides=user_override_fields,
+                mode=args.auto_tune_mode,
+                pre_norm_mode=args.pre_norm,
+                cache_ttl=args.autotune_cache_ttl,
+                no_cache=getattr(args, "autotune_no_cache", False),
+                artifact_dir=dump_dir,
+            )
+            elapsed_ms = int((time.perf_counter() - preflight_start) * 1000)
+            preflight_diag["elapsed_ms"] = elapsed_ms
+
+            if args.auto_tune_mode == "apply":
+                for key, value in preflight_cfg.items():
+                    if key == "pre_norm":
+                        continue
+                    if hasattr(asr_cfg, key):
+                        setattr(asr_cfg, key, value)
+
+            pre_norm_meta = preflight_diag.get("pre_norm", {})
+            if (
+                pre_norm_meta.get("final") == "apply"
+                and pre_norm_meta.get("applied_path")
+            ):
+                VOCAL_AUDIO = pre_norm_meta["applied_path"]
+
+            summary_payload = {
+                "audio": audio.name if args.redact_paths else str(audio),
+                "autotune": {
+                    "snr_db": preflight_diag["metrics"].get("snr_db"),
+                    "micro_ratio": preflight_diag["metrics"].get("micro_segment_ratio"),
+                    "decision": preflight_diag["suggestion"]["rationale"].get("decoding_mode"),
+                    "pre_norm": pre_norm_meta.get("final"),
+                },
+                "final_config": preflight_diag.get("final_config", {}),
+                "elapsed_ms": elapsed_ms,
+            }
+            if args.log_preflight:
+                logger.info("Preflight summary: %s", json.dumps(summary_payload, ensure_ascii=False))
+
+            diag_artifact = json.loads(json.dumps(preflight_diag, ensure_ascii=False))
+            if args.redact_paths and diag_artifact.get("pre_norm", {}).get("applied_path"):
+                diag_artifact["pre_norm"]["applied_path"] = None
+
+            diagnostics_path = dump_dir / f"{base.name}.preflight.json"
+            suggested_path = dump_dir / f"{base.name}.autotune.suggested.json"
+            final_path = dump_dir / f"{base.name}.autotune.final.json"
+
+            atomic_json(diagnostics_path, diag_artifact)
+            atomic_json(suggested_path, preflight_diag["suggestion"])
+            atomic_json(final_path, preflight_diag.get("final_config", {}))
 
         # duration (MUST be the file passed to ASR for proper %)
         total_sec = read_duration_seconds(VOCAL_AUDIO)

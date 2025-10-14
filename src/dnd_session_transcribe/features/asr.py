@@ -34,12 +34,13 @@ def run_asr(audio_path: str, out_base: pathlib.Path,
     )
 
     logger.info(
-        "[ASR] model=%s device=%s compute=%s beam=%s patience=%s vad=%s",
+        "[ASR] model=%s device=%s compute=%s beam=%s patience=%s best_of=%s vad=%s",
         asr_cfg.model,
         asr_cfg.device,
         asr_cfg.compute_type,
         asr_cfg.beam_size,
         asr_cfg.patience,
+        asr_cfg.best_of,
         asr_cfg.use_vad,
     )
     logger.debug("VAD parameters: %s", vad_params)
@@ -62,6 +63,8 @@ def run_asr(audio_path: str, out_base: pathlib.Path,
         no_speech_threshold=asr_cfg.no_speech_threshold,
         compression_ratio_threshold=asr_cfg.compression_ratio_threshold,
         log_prob_threshold=asr_cfg.log_prob_threshold,
+        best_of=asr_cfg.best_of,
+        condition_on_previous_text=asr_cfg.condition_on_previous_text,
         hotwords=hotwords,
         initial_prompt=init_prompt,
     )
