@@ -144,3 +144,63 @@ def test_run_asr_retries_with_float32_on_init_failure(asr_module, tmp_path, monk
 
     assert persisted["segments"] == result
     assert [seg["text"] for seg in result] == ["Hello there", "General Kenobi"]
+
+
+def test_run_asr_exits_when_same_line_repeats(asr_module, tmp_path, monkeypatch):
+    """``run_asr`` should exit early when the decoder loops on identical text."""
+
+    sentinel_vad = {"sentinel": "vad"}
+    monkeypatch.setattr(asr_module, "build_vad_params", lambda *_args, **_kwargs: sentinel_vad)
+
+    created_bars = []
+
+    class DummyTqdm:
+        def __init__(self, *args, **kwargs):
+            self.n = 0
+            self.closed = False
+            created_bars.append(self)
+
+        def update(self, n=1):
+            self.n += n
+
+        def refresh(self):
+            pass
+
+        def close(self):
+            self.closed = True
+
+    monkeypatch.setattr(asr_module, "tqdm", DummyTqdm)
+
+    repeated_text = "Looping line"
+
+    class DummyWhisper:
+        def transcribe(self, *_args, **_kwargs):
+            def _iter():
+                for i in range(8):
+                    yield SimpleNamespace(start=float(i), end=float(i + 1), text=repeated_text)
+
+            return _iter(), {"language": "en"}
+
+    monkeypatch.setattr(asr_module, "WhisperModel", lambda *_args, **_kwargs: DummyWhisper())
+
+    cfg = ASRConfig()
+    out_base = tmp_path / "session"
+
+    with pytest.raises(SystemExit) as excinfo:
+        asr_module.run_asr(
+            audio_path="dummy.wav",
+            out_base=out_base,
+            asr_cfg=cfg,
+            hotwords="dragon, lich",
+            init_prompt="You are the narrator",
+            resume=False,
+            total_sec=10.0,
+        )
+
+    message = str(excinfo.value)
+    assert "Detected the same line 5 times" in message
+    assert repeated_text in message
+    assert "vad_min_speech_ms=250" in message
+    assert "hotwords_length" in message
+    assert "initial_prompt_length" in message
+    assert all(bar.closed for bar in created_bars)
